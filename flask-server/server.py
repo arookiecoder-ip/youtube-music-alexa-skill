@@ -7743,6 +7743,13 @@ def jam_join(token):
         return jsonify(error=str(exc)), 403
     session['jam'] = token
     session['jam_member'] = member
+    if body.get('listen') is True and device_id:
+        devices=[d for d in body.get('devices',[]) if isinstance(d,dict) and d.get('kind')=='phone'] if isinstance(body.get('devices'),list) else []
+        _jam_rooms.presence(token,device_id,member,body.get('name') or 'Phone',
+            details={'username':name,'kind':'phone','identity':_player_identity_for_user_id(user['id']) if user else None,
+                     'devices':devices or [{'id':'phone','kind':'phone','name':body.get('name') or 'Phone','active':True,'online':True}]})
+        _jam_rooms.attach_phone(token,member,device_id)
+        _jam_drive(token)
     return jsonify(ok=True, host=False)
 
 
@@ -8012,8 +8019,8 @@ def jam_control():
             return jsonify(ok=True)
         state = _jam_rooms.transact(token, action, body, member['id'] if member else None)
         _jam_drive(token)
-        if action in ('queue','select','next','previous','play','retry'):
-            _jam_prepare(token,state,expand=action=='queue' and len(state['queue'])==1)
+        if action in ('queue','select','next','previous','play','retry','radio'):
+            _jam_prepare(token,state,expand=action=='radio' or action=='queue' and len(state['queue'])==1)
         state = _jam_rooms.presented(token,state)
     except PermissionError as exc:
         return jsonify(error=str(exc)), 403

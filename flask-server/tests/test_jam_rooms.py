@@ -50,6 +50,58 @@ class JamRoomsTests(unittest.TestCase):
         self.count += 1
         return self.rooms.transact('room', action, dict(command_id=f'command-{self.count}', revision=self.state()['revision'], **fields))
 
+    def test_invite_attaches_guest_without_restarting_host(self):
+        self.now += 3
+        before = self.state()
+        member = self.members.join('room', 'alice', 'Alice', 'alice-phone')
+        self.rooms.presence('room', 'alice-phone', member, 'Alice phone')
+        self.assertTrue(self.rooms.attach_phone('room', member, 'alice-phone'))
+        after = self.state()
+        for field in ('queue', 'entry_id', 'position_ms', 'playing', 'transport_revision', 'seek_revision', 'queue_version'):
+            self.assertEqual(after[field], before[field], field)
+        self.assertEqual(after['mode'], 'multiple')
+        self.assertEqual(after['selected'], ['host-phone', 'alice-phone'])
+        revision = after['revision']
+        self.assertTrue(self.rooms.attach_phone('room', member, 'alice-phone'))
+        self.assertEqual(self.state()['revision'], revision)
+
+    def test_invite_cannot_attach_another_members_device(self):
+        member = self.members.join('room', 'alice', 'Alice', 'alice-phone')
+        with self.assertRaises(PermissionError):
+            self.rooms.attach_phone('room', member, 'host-phone')
+
+    def test_invite_does_not_mix_phone_with_echo(self):
+        self.command('configure', mode='single', selected=['host-phone'], targets={'host-phone':'alexa:echo'})
+        member = self.members.join('room', 'alice', 'Alice', 'alice-phone')
+        before = self.state()
+        self.assertFalse(self.rooms.attach_phone('room', member, 'alice-phone'))
+        self.assertEqual(self.state()['selected'], before['selected'])
+
+    def test_radio_keeps_current_song_identity_and_transport(self):
+        self.now += 3
+        before = self.state()
+        after = self.command('radio')
+        for field in ('entry_id', 'position_ms', 'playing', 'transport_revision', 'seek_revision'):
+            self.assertEqual(after[field], before[field], field)
+        self.assertEqual(len(after['queue']), 1)
+        self.assertGreater(after['queue_version'], before['queue_version'])
+
+    def test_radio_new_seed_replaces_song_and_starts_it(self):
+        after = self.command('radio', tracks=[self.songs()[1]])
+        self.assertEqual(after['video_id'], 'bbbbbbbbbbb')
+        self.assertEqual(after['position_ms'], 0)
+        self.assertTrue(after['playing'])
+        self.assertEqual(len(after['queue']), 1)
+
+    def test_queue_artwork_normalizes_catalog_shapes_and_falls_back(self):
+        for fields, expected in [
+            ({'thumbnail': {'url':'https://example.test/art.jpg'}}, 'https://example.test/art.jpg'),
+            ({'thumbnails':[{'url':'https://example.test/small.jpg'}, {'url':'https://example.test/large.jpg'}]}, 'https://example.test/large.jpg'),
+            ({'thumbnail': 'invalid'}, 'https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg'),
+            ({}, 'https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg'),
+        ]:
+            self.assertEqual(self.rooms.tracks([dict(self.songs()[0], **fields)])[0]['thumbnail'], expected)
+
     def test_start_preserves_existing_host_media_identity_and_position(self):
         self.rooms.start('room',{'queue':[dict(self.songs()[0],entry_id='already-playing')],
             'queue_index':0,'playing':True,'position_ms':4500},'host-phone')

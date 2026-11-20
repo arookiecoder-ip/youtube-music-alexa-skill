@@ -52,9 +52,36 @@ class JamRooms:
             if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not 0 <= duration <= 86400000:
                 duration = 0
             tracks.append({'video_id': video, 'title': str(raw.get('title') or 'Song')[:500],
-                'artist': str(raw.get('artist') or '')[:500], 'thumbnail': str(raw.get('thumbnail') or raw.get('thumbnailUri') or '')[:2048],
+                'artist': str(raw.get('artist') or '')[:500], 'thumbnail': JamRooms.thumbnail(raw,video),
                 'duration_ms': int(duration), 'entry_id': secrets.token_hex(12)})
         return tracks
+
+    @staticmethod
+    def thumbnail(raw, video):
+        value=raw.get('thumbnail') or raw.get('thumbnailUri') or raw.get('thumbnails') or ''
+        if isinstance(value,list):value=value[-1] if value else ''
+        if isinstance(value,dict):value=value.get('url','')
+        return value[:2048] if isinstance(value,str) and value.startswith(('https://','http://')) else 'https://i.ytimg.com/vi/'+video+'/hqdefault.jpg'
+
+    def attach_phone(self, token, member, device):
+        """Explicit invite consent adds only the guest phone; host transport is untouched."""
+        with self.database() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if not db.execute('SELECT 1 FROM jam_members WHERE token=? AND id=? AND device_id=? AND removed=0 AND left_room=0',(token,member,device)).fetchone():
+                raise PermissionError('This phone has not joined the Jam.')
+            row=db.execute('SELECT state FROM jam_rooms WHERE token=?',(token,)).fetchone()
+            if not row:raise JamConflict('This Jam has ended.')
+            state=json.loads(row['state'])
+            echoes={r['device'] for r in db.execute('SELECT device,details FROM jam_outputs WHERE token=?',(token,)) if json.loads(r['details']).get('server_echo')}
+            if any(d in echoes or state.get('targets',{}).get(d,'').startswith('alexa:') for d in state['selected']):return False
+            if device not in state['selected']:
+                self._advance(state)
+                state['selected'].append(device)
+                state['mode']='multiple' if len(state['selected'])>1 else 'single'
+                state.setdefault('targets',{})[device]='phone'
+                state['revision']+=1
+                db.execute('UPDATE jam_rooms SET state=? WHERE token=?',(json.dumps(state),token));db.commit()
+            return True
 
     def start(self, token, snapshot, device):
         self.ensure()
@@ -168,7 +195,7 @@ class JamRooms:
                     raise ValueError('A command ID is required.')
                 duplicate = db.execute('SELECT 1 FROM jam_commands WHERE token=? AND id=?', (token, command)).fetchone()
                 if not duplicate:
-                    if action in ('remove', 'reorder', 'queue', 'shuffle', 'next', 'previous', 'select', 'repeat', 'configure', 'sort', 'clear_played', 'reshuffle') and body.get('revision') != state['revision']:
+                    if action in ('remove', 'reorder', 'queue', 'shuffle', 'next', 'previous', 'select', 'repeat', 'configure', 'sort', 'clear_played', 'reshuffle', 'radio') and body.get('revision') != state['revision']:
                         raise JamConflict('The Jam changed. Refresh and try again.')
                     if action=='configure':self._check_echo_reservations(db,token,body.get('selected',[]))
                     self._command(state, action, body)
@@ -237,6 +264,20 @@ class JamRooms:
                 raise ValueError('No song at that position.')
             state.update(queue_index=index, position_ms=0)
             state['seek_revision'] += 1
+        elif action == 'radio':
+            if body.get('tracks'):
+                tracks=self.tracks(body['tracks'])
+                if not tracks:raise ValueError('Choose a song.')
+                seed=tracks[0]
+                if not queue or queue[state['queue_index']]['video_id']!=seed['video_id']:
+                    state.update(queue=[seed],queue_index=0,position_ms=0,playing=True)
+                    state['transport_revision']=state.get('transport_revision',1)+1
+                    state['seek_revision']+=1
+                    queue=state['queue']
+            if not queue:raise ValueError('Add a song to the Jam first.')
+            state['queue']=queue[:state['queue_index']+1]
+            state['shuffle']=False
+            state['queue_version']+=1
         elif action in ('queue', 'append', 'next_items'):
             tracks = self.tracks(body.get('tracks'))
             if not tracks:
