@@ -49,3 +49,12 @@ entry/runtime files together: the small entry point starts authorization during
 first-use SDK loading, and the runtime verifies the request before accessing
 persistence. Fresh app selections can receive their startup data in that same
 response. This uses no keepalive timer or synthetic Alexa requests.
+
+Updated skills advertise direct-control launch support with their actual application
+ID on authorized identity requests. The backend learns this per Music Box account;
+it does not reuse another account's skill ID. When exactly one compatible skill is
+known, app resume and armed selections can launch it directly rather than send a
+simulated spoken command. A LaunchRequest starts audio only while a matching,
+fresh app intent is pending. Ordinary launches retain the welcome response. Older
+skills and ambiguous discovery retain the spoken route; an unconfirmed direct
+launch disables that route for the account until restart before the watchdog retries.

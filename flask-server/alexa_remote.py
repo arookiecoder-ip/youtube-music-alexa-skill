@@ -1671,6 +1671,25 @@ class AlexaRemote:
         """Transport control. Returns an error string, or None on success."""
         return self._run(self._command(serial, action, value))
 
+    def remember_control_skill(self, application_id):
+        if not isinstance(application_id, str) or not re.fullmatch(
+                r'amzn1\.ask\.skill\.[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', application_id):
+            return
+        if not hasattr(self, '_control_skill_ids'):
+            self._control_skill_ids = set()
+        self._control_skill_ids.add(application_id)
+
+    def control_skill_id(self):
+        candidates = getattr(self, '_control_skill_ids', ())
+        if not getattr(self, '_control_launch_disabled', False) and len(candidates) == 1:
+            return next(iter(candidates))
+        return None
+
+    def disable_control_launch(self):
+        # A launch acknowledgement is not playback confirmation. If the
+        # watchdog must retry, use the established voice route until restart.
+        self._control_launch_disabled = True
+
     def handoff_pause(self, serial: str):
         """Bound source cleanup so target selection never waits on Amazon's long timeout."""
         try:
@@ -1696,7 +1715,13 @@ class AlexaRemote:
                 await bounded_transport(self, serial, ('volume', volume), lambda: api.set_volume(volume / 100, queue_delay=0))
             elif action in _TRANSPORT_TEXT:
                 text = f"ask {SKILL_INVOCATION_NAME} to {_TRANSPORT_TEXT[action]}"
-                await bounded_transport(self, serial, text, lambda: api.run_custom(text, queue_delay=0))
+                control = getattr(self, 'control_skill_id', None)
+                skill_id = control() if action == 'play' and callable(control) else None
+                if skill_id:
+                    logger.info('[echo-control] direct_launch action=resume')
+                    await bounded_transport(self, serial, ('launch', skill_id), lambda: api.run_skill(skill_id, queue_delay=0))
+                else:
+                    await bounded_transport(self, serial, text, lambda: api.run_custom(text, queue_delay=0))
             else:
                 return f'Unknown action "{action}".'
         except TransportDeferred as exc:
@@ -1824,6 +1849,10 @@ class AlexaRemote:
         recognition mangles a hex-encoded id. The skill hears the phrase, calls
         /armed_play/ for this device, and plays what was armed. ``offset_ms`` is
         carried by the arm, not this phrase."""
+        skill_id = self.control_skill_id()
+        if skill_id:
+            logger.info('[echo-control] direct_launch action=play offset_ms=%s', offset_ms)
+            return self._run(self._text_command(serial, '', skill_id=skill_id))
         marked = f"{self.SILENT_PLAY_MARKER} {self.APP_SELECTION_PHRASE}"
         return self._run(self._text_command(
             serial, f"ask {SKILL_INVOCATION_NAME} to play {marked}"))
@@ -1832,12 +1861,15 @@ class AlexaRemote:
         """Send arbitrary text to Alexa, as if spoken. Returns error or None."""
         return self._run(self._text_command(serial, text))
 
-    async def _text_command(self, serial, text):
+    async def _text_command(self, serial, text, skill_id=None):
         api, error = await self._api_for(serial, require_online=True, cached_online=True)
         if error:
             return error
         try:
-            await bounded_transport(self, serial, text, lambda: api.run_custom(text, queue_delay=0))
+            if skill_id:
+                await bounded_transport(self, serial, ('launch', skill_id), lambda: api.run_skill(skill_id, queue_delay=0))
+            else:
+                await bounded_transport(self, serial, text, lambda: api.run_custom(text, queue_delay=0))
         except TransportDeferred as exc:
             logger.warning("Amazon transport deferred: %s", exc)
             return str(exc)

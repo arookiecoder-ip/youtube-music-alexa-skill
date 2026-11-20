@@ -403,3 +403,43 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
             self.assertEqual(result.status_code,403)
             self.assertIsNotNone(server._peek_armed_play('echo'))
         finally:server._PLAYER_IDENTITY.reset(slot)
+
+    def launch(self,kind='play',age=0,processing=True):
+        server=self.server;identity=server._player_identity_for_user_id(self.user['id'])
+        token=server._PLAYER_IDENTITY.set(identity)
+        try:
+            server._now_playing.update(video_id='AAAAAAAAAAA',alexa_intent_at=time.time()-age-1,
+                playback_processing=processing,queue=[dict(video_id='AAAAAAAAAAA',title='Target')],queue_index=0)
+            server._playback_output.alexa('echo',wait=False)
+            server._arm_play('echo','AAAAAAAAAAA',42000,kind=kind)
+            server._ARMED_PLAYS['echo']['armed_at']-=age
+            with mock.patch.object(server.Supporting,'get_stream',new=mock.AsyncMock(return_value={'audio_url':'https://music.example/audio'})):
+                response=self.client.get('/api/alexa/identity/?include_control=1',headers={**self.headers,'X-Alexa-Request-Type':'LaunchRequest','X-MusicBox-Control-Launch':'1','X-MusicBox-Application-Id':'amzn1.ask.skill.11111111-1111-1111-1111-111111111111'})
+            remaining=server._peek_armed_play('echo')
+            return response,remaining
+        finally:server._PLAYER_IDENTITY.reset(token)
+
+    def test_launch_seek_consumes_once_and_bundles_position(self):
+        response,remaining=self.launch()
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json['control']['offset_ms'],42000)
+        self.assertIn('startup',response.json['control'])
+        self.assertIsNone(remaining)
+
+    def test_launch_resume_peeks_and_bundles_fresh_stream(self):
+        response,remaining=self.launch(kind='resume')
+        self.assertEqual(response.json['control']['offset_ms'],42000)
+        self.assertIn('resume_stream',response.json['control'])
+        self.assertIsNotNone(remaining)
+
+    def test_launch_never_consumes_completed_or_old_or_queue_sync_intents(self):
+        for options in ({'processing':False},{'age':31},{'kind':'queue_sync:old'}):
+            response,remaining=self.launch(**options)
+            self.assertNotIn('control',response.json)
+            self.assertIsNotNone(remaining)
+
+    def test_revoked_launch_cannot_consume_an_armed_selection(self):
+        self.access.revoke(self.user['id'])
+        response,remaining=self.launch()
+        self.assertEqual(response.status_code,403)
+        self.assertIsNotNone(remaining)

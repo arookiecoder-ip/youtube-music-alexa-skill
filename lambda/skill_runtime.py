@@ -38,6 +38,15 @@ class LaunchRequestHandler(AbstractRequestHandler):
 
     def handle(self, handler_input: HandlerInput) -> Response:
         logger.info("In LaunchRequestHandler")
+        envelope = handler_input.request_envelope
+        if getattr(envelope, '_musicbox_launch_control', '') == 'resume':
+            return player.Controller.resume(handler_input, is_playback=True)
+        if getattr(envelope, '_musicbox_launch_control', '') == 'play':
+            armed, error = player.Api.get_armed_play(handler_input)
+            if error or not armed:
+                return player.Controller.error_response(handler_input, error or Exception(data.NOT_FOUND), True)
+            return player.Controller.fetch_video_id(handler_input, armed[0],
+                                                   is_playback=True, offset_in_ms=armed[1])
         speak_output = "Welcome to Music Box. Ask me to play a song, artist, album, or playlist."
         return (
             handler_input.response_builder
@@ -869,6 +878,13 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
         play = result.get('play') if 'include_play' in params else None
         if isinstance(play, dict):
             envelope._musicbox_play_arm = play
+        control = result.get('control') if 'include_control' in params else None
+        if isinstance(control, dict) and control.get('kind') in ('play', 'resume'):
+            envelope._musicbox_launch_control = control['kind']
+            if control['kind'] == 'resume':
+                envelope._musicbox_resume_arm = control
+            else:
+                envelope._musicbox_play_arm = control
 
 
 class LoadPersistenceAttributesRequestInterceptor(AbstractRequestInterceptor):

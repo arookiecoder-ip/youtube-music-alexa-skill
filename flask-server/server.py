@@ -6985,6 +6985,9 @@ def _watch_playback_confirmation(serial, video_id, resend, expected=None):
         logger.warning("[playback-watchdog] no confirmation for %s in %ss, retrying once", video_id, PLAYBACK_CONFIRM_TIMEOUT)
         if not _still_relevant():
             return
+        disable = getattr(alexa_remote.remote, 'disable_control_launch', None)
+        if callable(disable):
+            disable()
         error = resend()
         if error:
             logger.error("[playback-watchdog] retry dispatch failed: %s", error)
@@ -7090,6 +7093,9 @@ def _watch_resume_confirmation(serial, video_id, staged_revision, expected=None)
         # them so a newer pause, resume or output handoff cannot be retriggered.
         if _confirmed() or _superseded():
             return
+        disable = getattr(alexa_remote.remote, 'disable_control_launch', None)
+        if callable(disable):
+            disable()
         error = alexa_remote.remote.command(serial, 'play')
         if error:
             logger.error("[resume-watchdog] retry dispatch failed: %s", error)
@@ -7364,7 +7370,25 @@ def alexa_account_identity():
     if binding is None:
         return error_response('This Echo is not authorized for this account.', 403)
     _log_skill_runtime_timing()
+    if request.headers.get('X-MusicBox-Control-Launch') == '1':
+        remember = getattr(alexa_remote.remote, 'remember_control_skill', None)
+        if callable(remember):
+            remember(request.headers.get('X-MusicBox-Application-Id'))
     payload = {'binding': binding['version']}
+    if (request.args.get('include_control') == '1'
+            and request.headers.get('X-MusicBox-Control-Launch') == '1'
+            and request.headers.get('X-Alexa-Request-Type') == 'LaunchRequest'):
+        armed = _peek_armed_play()
+        with _np_lock:
+            pending = (armed and armed[0] == _now_playing.get('video_id')
+                       and _now_playing.get('playback_processing')
+                       and _playback_output.snapshot()['playback_output'] == 'alexa'
+                       and 0 <= time.time() - armed[2] <= 30
+                       and armed[2] >= (_now_playing.get('alexa_intent_at') or 0))
+        if pending and armed[3] == 'resume':
+            payload['control'] = _peek_armed_payload(include_resume_stream=True)
+        elif pending and armed[3] == 'play':
+            payload['control'] = _consume_armed_payload(include_stream=True)
     if request.args.get('include_resume') == '1':
         payload['resume'] = _peek_armed_payload(include_resume_stream=True)
     if (request.args.get('include_play') == '1'

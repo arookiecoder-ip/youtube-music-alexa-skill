@@ -20,6 +20,8 @@ def http_client():
 
 
 def identity_params(kind, intent='', query=''):
+    if kind == 'LaunchRequest':
+        return {'include_control': '1'}
     if kind == 'PlaybackController.PlayCommandIssued' or (
             kind == 'IntentRequest' and intent in ('AMAZON.ResumeIntent', 'PlayAudio')):
         return {'include_resume': '1'}
@@ -83,6 +85,7 @@ def identity_headers(event):
         'X-Alexa-Request-Id': request.get('requestId', ''),
         'X-Alexa-Request-Type': request.get('type', ''),
     }
+    headers.update(control_headers(system.get('application', {}).get('applicationId', '')))
     intent = (request.get('intent') or {}).get('name')
     if intent:
         headers['X-Alexa-Intent-Name'] = intent
@@ -97,6 +100,14 @@ def identity_headers(event):
     if request.get('timestamp'):
         headers['X-Alexa-Request-Timestamp'] = request['timestamp']
     return headers
+
+
+def control_headers(application_id):
+    if isinstance(application_id, str) and re.fullmatch(
+            r'amzn1\.ask\.skill\.[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', application_id):
+        return {'X-MusicBox-Control-Launch': '1',
+                'X-MusicBox-Application-Id': application_id}
+    return {}
 
 
 def _fetch(url, params, headers):

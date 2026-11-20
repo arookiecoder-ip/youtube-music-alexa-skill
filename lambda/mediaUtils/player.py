@@ -227,6 +227,8 @@ def skill_identity_headers(handler_input):
     if binding:
         headers['X-Alexa-Binding'] = binding
     headers.update(skill_bootstrap.runtime_headers())
+    headers.update(skill_bootstrap.control_headers(
+        getattr(getattr(system, 'application', None), 'application_id', '')))
     return headers
 
 
