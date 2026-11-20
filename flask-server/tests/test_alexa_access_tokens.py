@@ -360,3 +360,46 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         with mock.patch.object(self.server,'_peek_armed_payload') as peek:
             result=self.client.get('/api/alexa/identity/?include_resume=1',headers=self.headers)
         self.assertEqual(result.status_code,403);peek.assert_not_called()
+
+    def test_fresh_play_identity_bundles_and_consumes_only_the_accounts_arm(self):
+        from urllib.parse import urlsplit,parse_qs
+        server=self.server;identity=server._player_identity_for_user_id(self.user['id'])
+        slot=server._PLAYER_IDENTITY.set(identity)
+        try:
+            video='AAAAAAAAAAA'
+            server._now_playing.update(video_id=video,queue=[{'video_id':video,'title':'Own song','artist':'Artist'}],queue_index=0)
+            server._arm_play('echo',video,12000)
+            headers={**self.headers,'X-Alexa-Request-Type':'IntentRequest','X-Alexa-Intent-Name':'PlaySongIntent'}
+            with mock.patch.object(server,'PUBLIC_BASE_URL','https://music.example'),mock.patch.object(server,'_ensure_audio_ready_for_play'):
+                result=self.client.get('/api/alexa/identity/?include_play=1',headers=headers)
+            self.assertEqual(result.status_code,200)
+            play=result.json['play'];self.assertEqual(play['video_id'],video)
+            self.assertEqual(play['offset_ms'],12000)
+            self.assertEqual(play['startup']['song_info']['metadata']['title'],'Own song')
+            cap=parse_qs(urlsplit(play['startup']['song_info']['stream']['audio_url']).query)['cap'][0]
+            self.assertEqual(self.layer.alexa_identity.stream_user(cap,video)['id'],self.user['id'])
+            self.assertIsNone(server._peek_armed_play('echo'))
+            self.assertEqual(self.client.get('/api/alexa/identity/?include_play=1',headers=headers).json['play'],{'video_id':None})
+        finally:server._PLAYER_IDENTITY.reset(slot)
+
+    def test_fresh_play_opt_in_cannot_consume_an_arm_for_another_intent(self):
+        server=self.server;slot=server._PLAYER_IDENTITY.set(server._player_identity_for_user_id(self.user['id']))
+        try:
+            server._arm_play('echo','AAAAAAAAAAA')
+            for kind,name in [('IntentRequest','AMAZON.PauseIntent'),('AudioPlayer.PlaybackStarted','PlaySongIntent')]:
+                result=self.client.get('/api/alexa/identity/?include_play=1',headers={**self.headers,
+                    'X-Alexa-Request-Type':kind,'X-Alexa-Intent-Name':name})
+                self.assertEqual(result.status_code,200)
+                self.assertNotIn('play',result.json)
+                self.assertIsNotNone(server._peek_armed_play('echo'))
+        finally:server._PLAYER_IDENTITY.reset(slot)
+
+    def test_revoked_fresh_play_preflight_never_consumes_the_arm(self):
+        server=self.server;slot=server._PLAYER_IDENTITY.set(server._player_identity_for_user_id(self.user['id']))
+        try:
+            server._arm_play('echo','AAAAAAAAAAA');self.access.revoke(self.user['id'])
+            result=self.client.get('/api/alexa/identity/?include_play=1',headers={**self.headers,
+                'X-Alexa-Request-Type':'IntentRequest','X-Alexa-Intent-Name':'PlaySongIntent'})
+            self.assertEqual(result.status_code,403)
+            self.assertIsNotNone(server._peek_armed_play('echo'))
+        finally:server._PLAYER_IDENTITY.reset(slot)

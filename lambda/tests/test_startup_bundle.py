@@ -149,3 +149,24 @@ class PreflightResumeBundleTests(unittest.TestCase):
                 result,error=player.Api.get_armed_play(request,peek=True,include_resume_stream=True)
             self.assertEqual(result[0],NEW_SONG)
             get.assert_called_once_with(request,'armed_play',{'peek':'1','include_resume_stream':'1'})
+
+class FreshPreflightBundleTests(unittest.TestCase):
+    def test_fresh_preflight_is_consumed_once_and_parsed_without_http(self):
+        request=handler();request.request_envelope._musicbox_play_arm=payload()
+        parsed=object()
+        with mock.patch.object(player.Api,'_get_json',return_value=({'video_id':None},None)) as get, \
+                mock.patch.object(player,'from_dict',return_value=parsed):
+            armed,error=player.Api.get_armed_play(request)
+            self.assertIsNone(error);self.assertEqual(armed[0],NEW_SONG)
+            result,error=player.Api.stream_video(request,NEW_SONG)
+            self.assertIs(result,parsed);get.assert_not_called()
+            player.Api.get_armed_play(request)
+            get.assert_called_once()
+        self.assertIsNone(request.request_envelope._musicbox_play_arm)
+
+    def test_resume_does_not_consume_a_cached_fresh_play(self):
+        request=handler();request.request_envelope._musicbox_play_arm=payload()
+        with mock.patch.object(player.Api,'_get_json',return_value=({'video_id':None},None)) as get:
+            armed,error=player.Api.get_armed_play(request,peek=True,include_resume_stream=True)
+        self.assertIsNone(armed);get.assert_called_once()
+        self.assertIsNone(request.request_envelope._musicbox_play_arm)

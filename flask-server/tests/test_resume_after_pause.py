@@ -394,6 +394,38 @@ class WatchResumeConfirmation(_CleanNowPlayingState):
                 server._now_playing.get('playback_revision', 0)) + 1
             return int(server._now_playing['playback_revision'])
 
+    def _cold_cached_confirmation(self, fresh):
+        video = 'COLDCACHE01'
+        revision = self._stage_resume(video)
+        clock = [1000.0]
+        def advance(seconds):
+            clock[0] += seconds
+            if clock[0] >= 1007.0:
+                with server._np_lock:
+                    server._now_playing['playback_confirmed'] = True
+        with mock.patch.object(server.time, 'time', side_effect=lambda: clock[0]), \
+             mock.patch.object(server.time, 'monotonic', side_effect=lambda: clock[0]), \
+             mock.patch.object(server.time, 'sleep', side_effect=advance), \
+             mock.patch.object(server._youtube_stream_for().current, 'has', return_value=True), \
+             mock.patch.object(server, '_download_in_progress', return_value=False), \
+             mock.patch.object(server, '_notify_sse'), \
+             mock.patch.object(server.alexa_remote.remote, 'command') as command:
+            resend = mock.Mock(return_value=None)
+            if fresh:
+                server._watch_playback_confirmation('TEST-SERIAL', video, resend)
+            else:
+                server._watch_resume_confirmation('TEST-SERIAL', video, revision)
+        command.assert_not_called()
+        resend.assert_not_called()
+        self.assertTrue(server._now_playing['playback_confirmed'])
+        self.assertLess(clock[0], 1012)
+
+    def test_cached_audio_cold_resume_does_not_restart_before_first_audio(self):
+        self._cold_cached_confirmation(fresh=False)
+
+    def test_cached_audio_cold_fresh_play_does_not_restart_before_first_audio(self):
+        self._cold_cached_confirmation(fresh=True)
+
     def test_confirmed_resume_needs_no_retry(self):
         revision = self._stage_resume('WATCHOK00001')
         with server._np_lock:

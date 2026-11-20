@@ -6844,13 +6844,11 @@ def _confirm_stream_delivery(video_id):
 # /proxy/ being hit — see _confirm_stream_delivery) and, if it doesn't arrive in
 # time, resends the command once before giving up and surfacing an error.
 PLAYBACK_CONFIRM_TIMEOUT = 12.0
-# When the audio is already cached, the Echo has nothing to wait on but the
-# trigger phrase + /proxy/ round-trip, so a stalled confirmation is known
-# almost immediately. Cutting the timeout for that case means a genuinely
-# dropped voice command (see the module comment above) gets retried in ~5s
-# instead of 12, without touching the cold-download case where 12s is close
-# to the actual first-byte latency.
-PLAYBACK_CONFIRM_TIMEOUT_CACHED = 5.0
+# Cached audio does not imply a warm Alexa Lambda. A real cold resume took
+# 6.5 seconds to request audio; the old five-second watchdog resent it while
+# the first request was still starting, producing a second stream/restart.
+# Keep the same confirmation allowance for cached and uncached selections.
+PLAYBACK_CONFIRM_TIMEOUT_CACHED = PLAYBACK_CONFIRM_TIMEOUT
 PLAYBACK_CONFIRM_POLL_INTERVAL = 0.5
 # After this long with no confirmation (and no fatal cause identified yet),
 # tell the UI something is happening instead of leaving it silent until the
@@ -6896,10 +6894,8 @@ def _watch_playback_confirmation(serial, video_id, resend, expected=None):
             return _relevant_locked()
 
     def _wait_once():
-        # A cache hit has nothing left to wait on but the trigger + /proxy/
-        # round-trip, so use the short timeout unless/until a download shows
-        # up mid-wait (handled below by resetting the deadline with the full
-        # window, same as the pre-existing "don't count download time" logic).
+        # Audio cache availability says nothing about Lambda initialization.
+        # Both paths allow a cold skill to finish before retrying.
         base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
                         if _youtube_stream_for().current.has(video_id)
                         else PLAYBACK_CONFIRM_TIMEOUT)
@@ -7312,14 +7308,72 @@ def _peek_armed_payload(serial=None, include_resume_stream=False):
     return payload
 
 
+def _consume_armed_payload(serial=None, include_stream=False):
+    armed = _consume_armed_play(serial)
+    if not armed:
+        return {'video_id': None}
+    video_id, offset_ms, armed_at, kind = armed
+    if request.environ.get('musicbox.alexa_token_authorized'):
+        with _np_lock:
+            if _now_playing.get('video_id') == video_id:
+                _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
+    # The outstanding trigger has now been served, so a later click may send a
+    # fresh one. Until this point additional clicks only re-arm (see
+    # _trigger_in_flight), which is what stops the Echo playing every song in a
+    # rapid-click burst one after another.
+    _clear_trigger_inflight(serial)
+    # New clients can start from this response instead of requesting the same
+    # song again through /stream_video/. Old clients keep the original shape.
+    payload = {'video_id': video_id, 'offset_ms': offset_ms,
+               'armed_at': armed_at, 'kind': kind}
+    if include_stream and kind == 'play':
+        with _np_lock:
+            current = _now_playing.get('video_id')
+            queue = _now_playing.get('queue') or []
+            index = _now_playing.get('queue_index', -1)
+            selected = isinstance(index, int) and 0 <= index < len(queue)
+            start = max(0, index - _SKILL_QUEUE_BEHIND) if selected and len(queue) > _SKILL_QUEUE_WINDOW else 0
+            queue = copy.deepcopy(queue[start:start + _SKILL_QUEUE_WINDOW])
+        if current == video_id and selected:
+            queue = [{'title': row.get('title', ''), 'artist': row.get('artist', ''),
+                      'video_id': row.get('video_id', ''),
+                      'thumbnail': _thumbnail_metadata(row.get('thumbnail')),
+                      'duration_ms': row.get('duration_ms', 0)} for row in queue]
+            metadata = queue[index - start]
+            if metadata.get('video_id') == video_id and metadata.get('title'):
+                stream = asyncio.run(Supporting.get_stream(video_id))
+                if stream:
+                    # A repeated song keeps its actual selected queue occurrence.
+                    payload['startup'] = {'song_info': {'metadata': metadata, 'stream': stream},
+                                          'playlist': queue, 'queue_index': index - start}
+    return payload
+
+
+def _log_skill_runtime_timing():
+    try:
+        value = float(request.headers.get('X-Skill-SDK-Load-Ms', ''))
+        if 0 <= value <= 60000:
+            logger.info('[skill-runtime-timing] sdk_load_ms=%.0f', value)
+    except (ValueError, TypeError):
+        pass
+
+
 @app.get('/api/alexa/identity/')
 def alexa_account_identity():
     binding = request.environ.get('musicbox.alexa_binding')
     if binding is None:
         return error_response('This Echo is not authorized for this account.', 403)
+    _log_skill_runtime_timing()
     payload = {'binding': binding['version']}
     if request.args.get('include_resume') == '1':
         payload['resume'] = _peek_armed_payload(include_resume_stream=True)
+    if (request.args.get('include_play') == '1'
+            and request.headers.get('X-Alexa-Request-Type') == 'IntentRequest'
+            and request.headers.get('X-Alexa-Intent-Name') == 'PlaySongIntent'):
+        payload['play'] = _consume_armed_payload(include_stream=True)
+    if request.headers.get('X-Skill-Auth-Overlap') == '1':
+        logger.info('[skill-entry-timing] auth_overlap=1 request=%s',
+                    request.headers.get('X-Alexa-Request-Type', ''))
     return _no_store(jsonify(payload))
 
 
@@ -9847,6 +9901,8 @@ def _reconcile_buffered_alexa_start(token, offset_ms=0, event_at=None, second_pr
 
 @app.route("/alexa/state_event/", methods=["POST"])
 def alexa_state_event():
+    if getattr(request, 'headers', {}).get('X-Skill-SDK-Load-Ms'):
+        _log_skill_runtime_timing()
     body = request.get_json(silent=True) or {}
     # Auth already handled by require_api_key middleware (key in ?key= param).
     event = body.get('event', '')
@@ -11813,44 +11869,7 @@ def armed_play():
     if (request.args.get("peek") or "") == "1":
         return jsonify(_peek_armed_payload(serial,
             include_resume_stream=request.args.get('include_resume_stream') == '1'))
-    armed = _consume_armed_play(serial)
-    if not armed:
-        return jsonify({'video_id': None})
-    video_id, offset_ms, armed_at, kind = armed
-    if request.environ.get('musicbox.alexa_token_authorized'):
-        with _np_lock:
-            if _now_playing.get('video_id') == video_id:
-                _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
-    # The outstanding trigger has now been served, so a later click may send a
-    # fresh one. Until this point additional clicks only re-arm (see
-    # _trigger_in_flight), which is what stops the Echo playing every song in a
-    # rapid-click burst one after another.
-    _clear_trigger_inflight(serial)
-    # New clients can start from this response instead of requesting the same
-    # song again through /stream_video/. Old clients keep the original shape.
-    payload = {'video_id': video_id, 'offset_ms': offset_ms,
-               'armed_at': armed_at, 'kind': kind}
-    if request.args.get('include_stream') == '1' and kind == 'play':
-        with _np_lock:
-            current = _now_playing.get('video_id')
-            queue = _now_playing.get('queue') or []
-            index = _now_playing.get('queue_index', -1)
-            selected = isinstance(index, int) and 0 <= index < len(queue)
-            start = max(0, index - _SKILL_QUEUE_BEHIND) if selected and len(queue) > _SKILL_QUEUE_WINDOW else 0
-            queue = copy.deepcopy(queue[start:start + _SKILL_QUEUE_WINDOW])
-        if current == video_id and selected:
-            queue = [{'title': row.get('title', ''), 'artist': row.get('artist', ''),
-                      'video_id': row.get('video_id', ''),
-                      'thumbnail': _thumbnail_metadata(row.get('thumbnail')),
-                      'duration_ms': row.get('duration_ms', 0)} for row in queue]
-            metadata = queue[index - start]
-            if metadata.get('video_id') == video_id and metadata.get('title'):
-                stream = asyncio.run(Supporting.get_stream(video_id))
-                if stream:
-                    # A repeated song keeps its actual selected queue occurrence.
-                    payload['startup'] = {'song_info': {'metadata': metadata, 'stream': stream},
-                                          'playlist': queue, 'queue_index': index - start}
-    return jsonify(payload)
+    return jsonify(_consume_armed_payload(serial, include_stream=request.args.get('include_stream') == '1'))
 
 
 @app.route("/alexa/search/", methods=["GET"])

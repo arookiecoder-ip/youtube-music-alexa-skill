@@ -87,6 +87,50 @@ class SecurityCases(unittest.TestCase):
         self.invoke(self.event('AMAZON.PauseIntent'))
         self.assertEqual(self.identity.call_args.args[1:],('api/alexa/identity',{}))
 
+    def test_cold_fresh_play_uses_one_authorized_call_and_preserves_user_state(self):
+        import json
+        self.invoke()
+        bucket=next(iter(self.rows.values()))['amazon-user']
+        bucket['saved_playlists']={'Favorites':{'id':'private-playlist','title':'Favorites'}}
+        self.get.reset_mock();self.save.reset_mock();self.identity_patch.stop()
+        event=self.event('PlaySongIntent')
+        event['request']['intent']['slots']={'songName':{'name':'songName','value':'silentmode the app selection'}}
+        meta=dict(title='New song',artist='Artist',video_id='AAAAAAAAAAA',thumbnail=None,duration_ms=180000)
+        payload={'binding':self.binding,'play':{'video_id':'AAAAAAAAAAA','offset_ms':12000,'kind':'play',
+            'startup':{'song_info':{'metadata':meta,'stream':{'audio_url':'https://music.example/fresh'}},
+                       'playlist':[meta],'queue_index':0}}}
+        def http(*args,**kwargs):
+            self.get.assert_not_called()
+            self.assertIn('include_play=1',args[1])
+            self.assertEqual(kwargs['headers']['X-Alexa-Device-Id'],'echo-a')
+            return Node(status=200,data=json.dumps(payload).encode())
+        with patch.object(skill,'_runtime',None),patch.object(player.http,'request',side_effect=http) as get:
+            response=skill.lambda_handler(event,Node(aws_request_id='offline-cold-invoke'))['response']
+        get.assert_called_once();self.get.assert_called_once();self.save.assert_called_once()
+        stream=response['directives'][0]['audioItem']['stream']
+        self.assertEqual(stream['offsetInMilliseconds'],12000)
+        self.assertEqual(stream['url'],'https://music.example/fresh')
+        self.assertTrue(stream['token'].endswith('|b'+self.binding))
+        saved=next(iter(self.rows.values()))['amazon-user']
+        self.assertEqual(saved['saved_playlists'],bucket['saved_playlists'])
+        self.assertEqual(saved['playlist'][0]['video_id'],'AAAAAAAAAAA')
+
+    def test_cold_authorization_denial_never_loads_state_or_retries(self):
+        import json
+        self.identity_patch.stop()
+        with patch.object(skill,'_runtime',None),patch.object(player.http,'request',return_value=Node(
+                status=403,data=json.dumps({'error':{'code':'alexa_access_denied'}}).encode())) as get:
+            response=skill.lambda_handler(self.event(),Node(aws_request_id='denied-cold'))['response']
+        get.assert_called_once();self.get.assert_not_called();self.save.assert_not_called()
+        self.assertNotIn('AudioPlayer.Play',[d['type'] for d in response.get('directives',[])])
+
+    def test_cold_network_failure_never_retries_or_reads_persistence(self):
+        self.identity_patch.stop()
+        with patch.object(skill,'_runtime',None),patch.object(player.http,'request',side_effect=OSError('synthetic failure')) as get:
+            response=skill.lambda_handler(self.event(),Node(aws_request_id='failed-cold'))['response']
+        get.assert_called_once();self.get.assert_not_called();self.save.assert_not_called()
+        self.assertNotIn('AudioPlayer.Play',[d['type'] for d in response.get('directives',[])])
+
     def test_device_and_generation_have_distinct_dynamodb_items(self):
         self.invoke(self.event(device='echo-a'))
         self.invoke(self.event(device='echo-b'))
