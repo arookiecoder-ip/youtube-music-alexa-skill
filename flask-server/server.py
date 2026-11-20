@@ -7013,13 +7013,14 @@ def _watch_playback_confirmation(serial, video_id, resend, expected=None):
         logger.exception("")
 
 
-def _watch_resume_confirmation(serial, video_id, staged_revision):
+def _watch_resume_confirmation(serial, video_id, staged_revision, expected=None):
     """Background watchdog for the website/voice resume transport.
 
     Unlike a fresh track play, a resume keeps the same video_id, so the
     generic `_watch_playback_confirmation` relevance check (video_id only)
     cannot tell "user paused again" from "device never confirmed". This
-    watcher is additionally bound to the exact staged revision: any newer
+    watcher is bound to the staged intent, output token and revision captured
+    before dispatch: any newer
     user intent (pause, seek, track change) bumps the revision and makes
     this watcher give up quietly instead of resending a stale play or
     surfacing a bogus timeout error.
@@ -7032,8 +7033,18 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
         return
 
     with _np_lock:
-        resume_intent = _now_playing.get('alexa_intent_at')
-        resume_output = _playback_output.snapshot()['output_token']
+        if expected is None:
+            expected = (_now_playing.get('alexa_intent_at'),
+                        _playback_output.snapshot()['output_token'])
+        resume_intent, resume_output = expected
+
+    def _relevant_locked():
+        output = _playback_output.snapshot()
+        return (_now_playing.get('video_id') == video_id
+                and int(_now_playing.get('playback_revision', 0)) == staged_revision
+                and _now_playing.get('alexa_intent_at') == resume_intent
+                and output['output_token'] == resume_output
+                and output['playback_output'] == 'alexa')
 
     def _confirmed():
         with _np_lock:
@@ -7045,15 +7056,14 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
         # A newer user intent (pause/seek/track change) or a different track
         # means this resume is no longer the live request: stay quiet.
         with _np_lock:
-            return (_now_playing.get('video_id') != video_id
-                    or int(_now_playing.get('playback_revision', 0)) != staged_revision)
+            return not _relevant_locked()
 
     def _wait_once():
         base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
                         if _youtube_stream_for().current.has(video_id)
                         else PLAYBACK_CONFIRM_TIMEOUT)
-        deadline = time.time() + base_timeout
-        while time.time() < deadline:
+        deadline = time.monotonic() + base_timeout
+        while time.monotonic() < deadline:
             if _confirmed() or _superseded():
                 return True
             # Same "don't count download time" rule as a fresh play: the Echo
@@ -7063,7 +7073,7 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
             if _download_in_progress(video_id):
                 if (_multiuser_layer is None
                         or _now_playing.get('_alexa_verified_intent_at') == resume_intent):
-                    deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
+                    deadline = time.monotonic() + PLAYBACK_CONFIRM_TIMEOUT
             time.sleep(PLAYBACK_CONFIRM_POLL_INTERVAL)
         return _confirmed() or _superseded()
 
@@ -7080,6 +7090,10 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
             return
         logger.warning("[resume-watchdog] no confirmation for %s in %ss, retrying once",
                        video_id, PLAYBACK_CONFIRM_TIMEOUT)
+        # Authentication checks may block. Recheck the original attempt after
+        # them so a newer pause, resume or output handoff cannot be retriggered.
+        if _confirmed() or _superseded():
+            return
         error = alexa_remote.remote.command(serial, 'play')
         if error:
             logger.error("[resume-watchdog] retry dispatch failed: %s", error)
@@ -7088,8 +7102,7 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
                     expected_intent=resume_intent, expected_output=resume_output)
                 return
             with _np_lock:
-                still_staged = (int(_now_playing.get('playback_revision', 0)) == staged_revision
-                                and _now_playing.get('video_id') == video_id
+                still_staged = (_relevant_locked()
                                 and not _now_playing.get('playback_confirmed'))
                 if still_staged:
                     _reset_progress(_computed_position_ms())
@@ -7103,14 +7116,17 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
             return
         logger.warning("[resume-watchdog] retry for %s also unconfirmed", video_id)
         with _np_lock:
-            still_staged = (int(_now_playing.get('playback_revision', 0)) == staged_revision
-                            and _now_playing.get('video_id') == video_id
+            still_staged = (_relevant_locked()
                             and not _now_playing.get('playback_confirmed'))
+            if still_staged:
+                _reset_progress(_computed_position_ms())
+                _now_playing.update(playing=False, playback_processing=False, playback_confirmed=False,
+                    playback_error={'type': 'timeout',
+                                    'message': "Couldn't resume playback. Check the device and try again."},
+                    updated_at=time.time())
+                _now_playing['playback_revision'] = staged_revision + 1
         if still_staged:
-            _update_now_playing(
-                playing=False,
-                playback_error={'type': 'timeout',
-                                'message': "Couldn't resume playback. Check the device and try again."})
+            _notify_sse()
     except Exception:
         logger.exception("")
 
@@ -9526,7 +9542,7 @@ def alexa_command():
             # falsely claiming playback the user must fix with another
             # pause/play. Bound to the staged revision so a newer user intent
             # (pause/seek/track change) is never disturbed.
-            _bg_thread(_watch_resume_confirmation, args=(serial, staged_video_id, staged_revision))
+            _bg_thread(_watch_resume_confirmation, args=(serial, staged_video_id, staged_revision, command_fence[1:]))
     elif action == 'pause':
         # Freeze the progress anchor before dispatch for the same reason: the
         # skill's PlaybackStopped event may arrive before the HTTP call returns.

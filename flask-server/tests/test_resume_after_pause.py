@@ -266,6 +266,8 @@ class ResumeDispatchAnchorsBeforeConfirmation(_CleanNowPlayingState):
                 observed['playing_during_dispatch'] = server._now_playing['playing']
                 observed['confirmed_during_dispatch'] = server._now_playing['playback_confirmed']
                 observed['position_during_dispatch'] = server._now_playing['position_ms']
+                observed['intent'] = server._now_playing['alexa_intent_at']
+                observed['output'] = server._playback_output.snapshot()['output_token']
             return None
 
         with mock.patch.object(server.alexa_remote.remote, 'command', side_effect=command) as command_mock, \
@@ -291,6 +293,7 @@ class ResumeDispatchAnchorsBeforeConfirmation(_CleanNowPlayingState):
         watchdog_args = watchdog_mock.call_args[0]
         self.assertEqual(watchdog_args[0], 'TEST-SERIAL')
         self.assertEqual(watchdog_args[1], 'WEBRESUME001')
+        self.assertEqual(watchdog_args[3], (observed['intent'], observed['output']))
         # Play-intent staging is distinguishable from pause staging:
         # playing=True while unconfirmed (pause stages playing=False).
         self.assertTrue(observed['playing_during_dispatch'])
@@ -436,6 +439,60 @@ class WatchResumeConfirmation(_CleanNowPlayingState):
         command_mock.assert_not_called()
         with server._np_lock:
             self.assertIsNone(server._now_playing.get('playback_error'))
+
+    def test_output_handoff_without_revision_change_cancels_retry(self):
+        revision = self._stage_resume('WATCHSUPER01')
+        with mock.patch.object(server._playback_output, 'snapshot', return_value={
+                'playback_output': 'phone', 'output_token': 'new-phone'}), \
+                mock.patch.object(server.alexa_remote.remote, 'command') as command:
+            self._run_watch('WATCHSUPER01', revision)
+        command.assert_not_called()
+        self.assertIsNone(server._now_playing.get('playback_error'))
+
+    def test_new_intent_with_same_revision_cancels_old_watchdog(self):
+        revision = self._stage_resume('WATCHSUPER01')
+        server._now_playing['alexa_intent_at'] = 43
+        with mock.patch.object(server._playback_output, 'snapshot', return_value={
+                'playback_output': 'alexa', 'output_token': 'same-output'}), \
+                mock.patch.object(server.alexa_remote.remote, 'command') as command:
+            server._watch_resume_confirmation('TEST-SERIAL', 'WATCHSUPER01', revision,
+                                               (42, 'same-output'))
+        command.assert_not_called()
+        self.assertIsNone(server._now_playing.get('playback_error'))
+
+    def test_handoff_during_authentication_check_cancels_retry(self):
+        revision = self._stage_resume('WATCHSUPER01')
+        output = {'playback_output': 'alexa', 'output_token': 'echo'}
+        def check():
+            output.update(playback_output='phone', output_token='phone')
+            return None
+        with mock.patch.object(server._playback_output, 'snapshot', side_effect=lambda: dict(output)), \
+                mock.patch.object(server, '_known_alexa_auth_failure', side_effect=check), \
+                mock.patch.object(server.alexa_remote.remote, 'command') as command:
+            self._run_watch('WATCHSUPER01', revision)
+        command.assert_not_called()
+        self.assertIsNone(server._now_playing.get('playback_error'))
+
+    def test_handoff_during_retry_does_not_fail_new_output(self):
+        revision = self._stage_resume('WATCHSUPER01')
+        output = {'playback_output': 'alexa', 'output_token': 'echo'}
+        def retry(*args):
+            output.update(playback_output='phone', output_token='phone')
+            return 'device offline'
+        with mock.patch.object(server._playback_output, 'snapshot', side_effect=lambda: dict(output)), \
+                mock.patch.object(server.alexa_remote.remote, 'command', side_effect=retry):
+            self._run_watch('WATCHSUPER01', revision)
+        self.assertTrue(server._now_playing['playing'])
+        self.assertIsNone(server._now_playing.get('playback_error'))
+
+    def test_timeout_clears_pending_state_and_preserves_resume_offset(self):
+        revision = self._stage_resume('WATCHRETRY01')
+        with mock.patch.object(server.alexa_remote.remote, 'command', return_value=None):
+            self._run_watch('WATCHRETRY01', revision)
+        self.assertFalse(server._now_playing['playback_processing'])
+        self.assertFalse(server._now_playing['playing'])
+        self.assertEqual(server._now_playing['position_ms'], 90000)
+        self.assertEqual(server._now_playing['playback_revision'], revision + 1)
 
     def test_invalid_video_id_is_ignored(self):
         with mock.patch.object(server.alexa_remote.remote, 'command') as command_mock:
