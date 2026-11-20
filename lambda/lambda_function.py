@@ -1,4 +1,4 @@
-import logging, os, boto3, data, re
+import logging, os, boto3, data, re, time
 import ask_sdk_core.utils as ask_utils
 from ask_sdk_core.skill_builder import CustomSkillBuilder
 from ask_sdk_core.api_client import DefaultApiClient
@@ -822,6 +822,7 @@ class ExceptionEncounteredRequestHandler(AbstractRequestHandler):
 # ############# REQUEST / RESPONSE INTERCEPTORS #####################
 class LogRequestInterceptor(AbstractRequestInterceptor):
     def process(self, handler_input: HandlerInput):
+        handler_input.request_envelope._musicbox_request_started = time.monotonic()
         logger.info(f"Request type: {handler_input.request_envelope.request.object_type}")
 
 
@@ -830,7 +831,13 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
         envelope = handler_input.request_envelope
         if not needs_state(envelope):
             return
-        result, error = player.Api._get_json(handler_input, 'api/alexa/identity', {})
+        envelope._musicbox_resume_arm = None
+        kind = envelope.request.object_type
+        intent = getattr(getattr(envelope.request, 'intent', None), 'name', '')
+        include_resume = (kind == 'PlaybackController.PlayCommandIssued'
+                          or (kind == 'IntentRequest' and intent in ('AMAZON.ResumeIntent', 'PlayAudio')))
+        params = {'include_resume': '1'} if include_resume else {}
+        result, error = player.Api._get_json(handler_input, 'api/alexa/identity', params)
         binding = result.get('binding') if isinstance(result, dict) else None
         if error or not isinstance(binding, str) or not re.fullmatch(r'[0-9a-f]{64}', binding):
             if isinstance(error, SkillAuthorizationError):
@@ -852,13 +859,19 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
         if (request_type.startswith('AudioPlayer.') or token) and not token.endswith('|b' + binding):
             raise SkillAuthorizationError('This playback belongs to an earlier Echo account binding.', code='stale_alexa_binding')
         envelope._musicbox_binding = binding
+        # Request-local only: never persist a capability or reuse it across events.
+        resume = result.get('resume') if include_resume else None
+        if isinstance(resume, dict):
+            envelope._musicbox_resume_arm = resume
 
 
 class LoadPersistenceAttributesRequestInterceptor(AbstractRequestInterceptor):
     def process(self, handler_input: HandlerInput):
         if not needs_state(handler_input.request_envelope):
             return
+        started = time.monotonic()
         persistence_attr = handler_input.attributes_manager.persistent_attributes
+        logger.info('[skill-timing] persistence_load_ms=%.0f', (time.monotonic() - started) * 1000)
         handler_input.request_envelope._musicbox_state_loaded = True
 
         user_id = player.Attributes.get_user_id(handler_input)
@@ -910,7 +923,14 @@ class LoadPersistenceAttributesRequestInterceptor(AbstractRequestInterceptor):
 class SavePersistenceAttributesResponseInterceptor(AbstractResponseInterceptor):
     def process(self, handler_input: HandlerInput, response):
         if getattr(handler_input.request_envelope, '_musicbox_state_loaded', False):
+            started = time.monotonic()
             handler_input.attributes_manager.save_persistent_attributes()
+            logger.info('[skill-timing] persistence_save_ms=%.0f', (time.monotonic() - started) * 1000)
+        started = getattr(handler_input.request_envelope, '_musicbox_request_started', None)
+        if started is not None:
+            logger.info('[skill-timing] request=%s total_ms=%.0f',
+                        handler_input.request_envelope.request.object_type,
+                        (time.monotonic() - started) * 1000)
 # ###################################################################
 
 

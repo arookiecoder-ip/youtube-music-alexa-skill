@@ -7292,12 +7292,35 @@ def _login_door_links():
     return layer.accounts.registration_open(), '/forgot-password'
 
 
+def _peek_armed_payload(serial=None, include_resume_stream=False):
+    peeked = _peek_armed_play(serial)
+    if not peeked:
+        return {'video_id': None}
+    video_id, offset_ms, armed_at, kind = peeked
+    if kind == 'resume' and request.environ.get('musicbox.alexa_token_authorized'):
+        with _np_lock:
+            if _now_playing.get('video_id') == video_id:
+                _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
+    payload = {'video_id': video_id, 'offset_ms': offset_ms,
+               'armed_at': armed_at, 'kind': kind}
+    if include_resume_stream and kind == 'resume':
+        # Supporting mints a new account/device-scoped capability using this
+        # request's verified binding. Never hand out a previously stored URL.
+        stream = asyncio.run(Supporting.get_stream(video_id))
+        if stream:
+            payload['resume_stream'] = stream
+    return payload
+
+
 @app.get('/api/alexa/identity/')
 def alexa_account_identity():
     binding = request.environ.get('musicbox.alexa_binding')
     if binding is None:
         return error_response('This Echo is not authorized for this account.', 403)
-    return _no_store(jsonify(binding=binding['version']))
+    payload = {'binding': binding['version']}
+    if request.args.get('include_resume') == '1':
+        payload['resume'] = _peek_armed_payload(include_resume_stream=True)
+    return _no_store(jsonify(payload))
 
 
 @app.post('/api/alexa/link/')
@@ -9829,6 +9852,9 @@ def alexa_state_event():
         event_at = datetime.fromisoformat(str(body.get('event_timestamp', '')).replace('Z', '+00:00')).timestamp()
     except (ValueError, TypeError, OverflowError):
         event_at = None
+    if event_at is not None and event in ('started', 'stopped'):
+        logger.info('[echo-event-timing] event=%s callback_delivery_ms=%.0f',
+                    event, max(0, time.time() - event_at) * 1000)
     event_token = str(body.get('token') or '')
     if event == 'started':
         try:
@@ -11744,23 +11770,8 @@ def armed_play():
     of an in-flight fresh play or seek."""
     serial = request.args.get("serial") or None
     if (request.args.get("peek") or "") == "1":
-        peeked = _peek_armed_play(serial)
-        if not peeked:
-            return jsonify({'video_id': None})
-        video_id, offset_ms, armed_at, kind = peeked
-        if kind == 'resume' and request.environ.get('musicbox.alexa_token_authorized'):
-            with _np_lock:
-                if _now_playing.get('video_id') == video_id:
-                    _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
-        payload = {'video_id': video_id, 'offset_ms': offset_ms,
-                   'armed_at': armed_at, 'kind': kind}
-        if request.args.get('include_resume_stream') == '1' and kind == 'resume':
-            # Supporting mints a new account/device-scoped capability using this
-            # request's verified binding. Never hand out a previously stored URL.
-            stream = asyncio.run(Supporting.get_stream(video_id))
-            if stream:
-                payload['resume_stream'] = stream
-        return jsonify(payload)
+        return jsonify(_peek_armed_payload(serial,
+            include_resume_stream=request.args.get('include_resume_stream') == '1'))
     armed = _consume_armed_play(serial)
     if not armed:
         return jsonify({'video_id': None})

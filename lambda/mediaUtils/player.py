@@ -826,7 +826,12 @@ class Api:
         params = {'peek': '1'} if peek else {'include_stream': '1'}
         if peek and include_resume_stream:
             params['include_resume_stream'] = '1'
-        response_json, error = Api._get_json(handler_input, 'armed_play', params)
+        preflight = getattr(handler_input.request_envelope, '_musicbox_resume_arm', None)
+        handler_input.request_envelope._musicbox_resume_arm = None
+        if peek and include_resume_stream and isinstance(preflight, dict):
+            response_json, error = preflight, None
+        else:
+            response_json, error = Api._get_json(handler_input, 'armed_play', params)
         if error:
             return None, error
         video_id = (response_json or {}).get('video_id')

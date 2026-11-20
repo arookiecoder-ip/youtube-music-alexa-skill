@@ -318,3 +318,45 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         self.assertTrue(player['playback_processing'])
         self.assertFalse(player['_alexa_auth_blocked'])
         notify.assert_not_called()
+
+    def test_identity_can_bundle_account_scoped_resume_without_consuming_it(self):
+        from urllib.parse import urlsplit, parse_qs
+        server=self.server;video='AAAAAAAAAAA'
+        identity=server._player_identity_for_user_id(self.user['id'])
+        token=server._PLAYER_IDENTITY.set(identity)
+        try:
+            server._now_playing.update(video_id=video,alexa_intent_at=42)
+            server._arm_play('echo',video,17000,kind='resume')
+            with mock.patch.object(server,'PUBLIC_BASE_URL','https://music.example'), \
+                    mock.patch.object(server,'_ensure_audio_ready_for_play'):
+                result=self.client.get('/api/alexa/identity/?include_resume=1',headers=self.headers)
+            self.assertEqual(result.status_code,200)
+            self.assertEqual(result.json['resume']['offset_ms'],17000)
+            self.assertIn('no-store',result.headers['Cache-Control'])
+            cap=parse_qs(urlsplit(result.json['resume']['resume_stream']['audio_url']).query)['cap'][0]
+            self.assertEqual(self.layer.alexa_identity.stream_user(cap,video)['id'],self.user['id'])
+            self.assertEqual(server._peek_armed_play('echo')[0],video)
+            self.assertEqual(server._now_playing['_alexa_verified_intent_at'],42)
+        finally:
+            server._PLAYER_IDENTITY.reset(token)
+
+    def test_identity_resume_bundle_does_not_mint_stream_for_play_or_missing_arm(self):
+        server=self.server;token=server._PLAYER_IDENTITY.set(server._player_identity_for_user_id(self.user['id']))
+        try:
+            with mock.patch.object(server.Supporting,'get_stream',new=mock.AsyncMock()) as stream:
+                empty=self.client.get('/api/alexa/identity/?include_resume=1',headers=self.headers)
+                self.assertEqual(empty.json['resume'],{'video_id':None})
+                server._arm_play('echo','AAAAAAAAAAA',kind='play')
+                fresh=self.client.get('/api/alexa/identity/?include_resume=1',headers=self.headers)
+                self.assertEqual(fresh.json['resume']['kind'],'play')
+                self.assertNotIn('resume_stream',fresh.json['resume'])
+                self.assertIsNotNone(server._peek_armed_play('echo'))
+            stream.assert_not_awaited()
+        finally:
+            server._PLAYER_IDENTITY.reset(token)
+
+    def test_revoked_identity_cannot_read_or_mint_a_resume_bundle(self):
+        self.access.revoke(self.user['id'])
+        with mock.patch.object(self.server,'_peek_armed_payload') as peek:
+            result=self.client.get('/api/alexa/identity/?include_resume=1',headers=self.headers)
+        self.assertEqual(result.status_code,403);peek.assert_not_called()
