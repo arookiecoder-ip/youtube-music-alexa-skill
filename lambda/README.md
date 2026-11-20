@@ -58,3 +58,9 @@ simulated spoken command. A LaunchRequest starts audio only while a matching,
 fresh app intent is pending. Ordinary launches retain the welcome response. Older
 skills and ambiguous discovery retain the spoken route; an unconfirmed direct
 launch disables that route for the account until restart before the watchdog retries.
+
+Playback directives for pending app controls also carry the exact backend intent
+revision in their AudioPlayer token. The signed stream capability carries that
+revision too. Delayed callbacks and byte-range requests from a previous play of
+the same song cannot confirm a newer resume or seek. Queue successor tokens and
+older skill compatibility retain their existing paths.

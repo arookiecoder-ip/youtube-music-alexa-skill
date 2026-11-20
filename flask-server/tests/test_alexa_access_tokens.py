@@ -42,6 +42,17 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         row = self.layer.db.fetchone('SELECT * FROM alexa_access_tokens WHERE id=?', (self.token.split('.')[0],))
         self.assertEqual(row['token_hash'], hashlib.sha256(self.token.encode()).hexdigest())
 
+    def test_stream_revision_is_signed_video_scoped_and_keeps_revocation_checks(self):
+        user,credential=self.access.authenticate(self.headers)
+        identity=self.layer.alexa_identity
+        cap=identity.stream_token(user['id'],'AAAAAAAAAAA',credential,control_revision='i5f5e100')
+        self.assertEqual(identity.stream_control_revision(cap,'AAAAAAAAAAA'),'i5f5e100')
+        self.assertIsNone(identity.stream_control_revision(cap,'BBBBBBBBBBB'))
+        self.assertIsNone(identity.stream_control_revision(cap+'x','AAAAAAAAAAA'))
+        self.assertEqual(identity.stream_user(cap,'AAAAAAAAAAA')['id'],user['id'])
+        self.access.rotate(user['id'])
+        self.assertIsNone(identity.stream_user(cap,'AAAAAAAAAAA'))
+
     def test_rotation_revokes_old_requests_and_existing_audio_urls(self):
         user, credential = self.access.authenticate(self.headers)
         cap = self.layer.alexa_identity.stream_token(user['id'], 'AAAAAAAAAAA', credential)

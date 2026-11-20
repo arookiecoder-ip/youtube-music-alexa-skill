@@ -871,6 +871,8 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
         if (request_type.startswith('AudioPlayer.') or token) and not token.endswith('|b' + binding):
             raise SkillAuthorizationError('This playback belongs to an earlier Echo account binding.', code='stale_alexa_binding')
         envelope._musicbox_binding = binding
+        envelope._musicbox_control_revision = result.get('control_revision')
+        envelope._musicbox_control_video = result.get('control_video')
         # Request-local only: never persist a capability or reuse it across events.
         resume = result.get('resume') if include_resume else None
         if isinstance(resume, dict):

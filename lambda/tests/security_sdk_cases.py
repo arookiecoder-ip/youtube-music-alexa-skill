@@ -401,7 +401,7 @@ class SecurityCases(unittest.TestCase):
 
     def test_control_launch_seek_uses_one_authorized_bundle_and_exact_offset(self):
         meta=dict(title='Seek target',artist='Artist',video_id='AAAAAAAAAAA',thumbnail=None)
-        self.identity.side_effect=lambda *args: ({'binding':self.binding,'control':{
+        self.identity.side_effect=lambda *args: ({'binding':self.binding,'control_revision':'i5f5e100','control_video':'AAAAAAAAAAA','control':{
             'video_id':'AAAAAAAAAAA','offset_ms':63000,'kind':'play','startup':{
                 'song_info':{'metadata':meta,'stream':{'audio_url':'https://music.example/audio'}},
                 'playlist':[meta],'queue_index':0}}},None)
@@ -410,6 +410,7 @@ class SecurityCases(unittest.TestCase):
         self.assertNotIn('outputSpeech',response)
         stream=response['directives'][0]['audioItem']['stream']
         self.assertEqual(stream['offsetInMilliseconds'],63000)
+        self.assertIn('|i5f5e100|',stream['token'])
         self.assertEqual(stream['url'],'https://music.example/audio')
         self.assertEqual(self.identity.call_count,1)
         self.assertEqual(self.identity.call_args.args[2],{'include_control':'1'})

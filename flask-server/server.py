@@ -5342,7 +5342,12 @@ class Supporting:
                 if not user_id:
                     raise ValueError('An authorized account is required for Echo playback')
                 binding = request.environ.get('musicbox.alexa_binding') if has_request_context() else None
-                cap = _multiuser_layer.alexa_identity.stream_token(user_id, video_id, binding=binding)
+                with _np_lock:
+                    intent = _now_playing.get('alexa_intent_at')
+                    revision = ('i' + format(int(intent * 1000000), 'x')
+                                if intent and _now_playing.get('video_id') == video_id else None)
+                cap = _multiuser_layer.alexa_identity.stream_token(user_id, video_id, binding=binding,
+                                                                 control_revision=revision)
                 return {'audio_url': f"{base}/proxy/?video_id={video_id}&cap={quote(cap)}"}
             key_param = f"&key={API_KEY}" if API_KEY else ""
             return {'audio_url': f"{base}/proxy/?video_id={video_id}{key_param}"}
@@ -6278,6 +6283,13 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
     with _np_lock:
         echo_output_token = _playback_output.snapshot()['output_token'] if confirm else None
         echo_intent = _now_playing.get('alexa_intent_at') if confirm else None
+    allow_confirmation = confirm
+    if confirm and _multiuser_layer is not None and request.args.get('cap'):
+        revision = _multiuser_layer.alexa_identity.stream_control_revision(request.args['cap'], video_id)
+        if revision and revision != 'i' + format(int((echo_intent or 0) * 1000000), 'x'):
+            # An old stream's later byte-range request must not confirm the
+            # replacement seek/resume merely because the video ID is unchanged.
+            allow_confirmation = False
     stream_identity = _current_identity()
     try:
         relay = _youtube_stream_for().open(video_id, method=request.method,
@@ -6313,7 +6325,7 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
                     return
                 if first:
                     first = False
-                    if confirm:
+                    if allow_confirmation:
                         _confirm_stream_delivery(video_id)
                     # A next-track Echo prefetch must not replace the song
                     # still playing. URL preparation and HEAD never get here.
@@ -6323,7 +6335,7 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
                                 _youtube_stream_for().current.activate(video_id)
                     logger.info('[stream-timing] youtube first byte %.0fms for %s',
                                 (time.monotonic() - started) * 1000, video_id)
-                    if confirm and isinstance(echo_intent, (int, float)) and echo_intent > 0:
+                    if allow_confirmation and isinstance(echo_intent, (int, float)) and echo_intent > 0:
                         logger.info('[startup-timing] video=%s intent to first audio byte %.0fms',
                                     video_id, max(0, time.time() - echo_intent) * 1000)
                 relay.remember(block)
@@ -7375,6 +7387,11 @@ def alexa_account_identity():
         if callable(remember):
             remember(request.headers.get('X-MusicBox-Application-Id'))
     payload = {'binding': binding['version']}
+    with _np_lock:
+        intent = _now_playing.get('alexa_intent_at')
+        if intent and _now_playing.get('playback_processing'):
+            payload['control_revision'] = 'i' + format(int(intent * 1000000), 'x')
+            payload['control_video'] = _now_playing.get('video_id')
     if (request.args.get('include_control') == '1'
             and request.headers.get('X-MusicBox-Control-Launch') == '1'
             and request.headers.get('X-Alexa-Request-Type') == 'LaunchRequest'):
@@ -9941,6 +9958,14 @@ def alexa_state_event():
                     event, max(0, time.time() - event_at) * 1000)
     event_token = str(body.get('token') or '')
     if event == 'started':
+        parts = event_token.split('|')
+        if len(parts) >= 3 and re.fullmatch(r'i[0-9a-f]{1,20}', parts[2]):
+            with _np_lock:
+                intent = _now_playing.get('alexa_intent_at')
+                expected = 'i' + format(int((intent or 0) * 1000000), 'x')
+                if intent and parts[2] != expected:
+                    return jsonify({'ok': True, 'ignored': 'superseded playback intent'})
+    if event == 'started':
         try:
             queued_offset = max(0, int(body.get('offset_in_ms', body.get('position_ms', 0)) or 0))
         except (TypeError, ValueError, OverflowError):
@@ -9969,7 +9994,7 @@ def alexa_state_event():
         tracked_token = _now_playing.get('alexa_token') or ''
         parts = event_token.split('|')
         occurrence_token = (len(parts) >= 3 and
-                            re.fullmatch(r'(?:[0-9a-f]{24}|q[0-9a-f]{24})', parts[2]))
+                            re.fullmatch(r'(?:[0-9a-f]{24}|q[0-9a-f]{24}|i[0-9a-f]{1,20})', parts[2]))
         stopped_ack = _now_playing.get('_alexa_stop_ack') or {}
         if (event == 'started' and event_token and event_token == tracked_token
                 and _playback_output.snapshot()['playback_output'] == 'phone'):

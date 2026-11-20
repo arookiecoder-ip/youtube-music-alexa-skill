@@ -23,6 +23,22 @@ class StreamRoutes(unittest.TestCase):
             patch=mock.patch.object(server._youtube_stream_for(),name,value);patch.start();self.addCleanup(patch.stop)
         self.addCleanup(self.relay.close)
 
+    def test_old_signed_stream_cannot_confirm_a_new_same_song_seek(self):
+        from types import SimpleNamespace
+        for old in (True,False):
+            self.relay=Relay(Upstream(),b'audio',mock.Mock())
+            server._youtube_stream_for().open.return_value=self.relay
+            revision='i'+format(int((9 if old else 10)*1000000),'x')
+            identity=SimpleNamespace(stream_control_revision=mock.Mock(return_value=revision))
+            with server.app.test_request_context('/proxy/?video_id='+VID+'&cap=signed'), \
+                    mock.patch.dict(server._now_playing,{'video_id':VID,'alexa_intent_at':10}), \
+                    mock.patch.object(server,'_multiuser_layer',SimpleNamespace(alexa_identity=identity)), \
+                    mock.patch.object(server,'_confirm_stream_delivery') as confirm:
+                response=server._serve_youtube_stream(VID,confirm=True)
+                self.assertTrue(b''.join(response.response).startswith(b'audio'))
+                response.close()
+                self.assertEqual(confirm.call_count,0 if old else 1)
+
     def test_audio_wait_hint_streams_without_disk_or_echo_side_effects(self):
         with mock.patch.object(server,'_confirm_stream_delivery') as confirm:
             r=self.client.get('/audio/?video_id='+VID+'&wait=1',headers=self.headers)
