@@ -9891,17 +9891,17 @@ def alexa_state_event():
         occurrence_token = (len(parts) >= 3 and
                             re.fullmatch(r'(?:[0-9a-f]{24}|q[0-9a-f]{24})', parts[2]))
         stopped_ack = _now_playing.get('_alexa_stop_ack') or {}
+        if (event == 'started' and event_token and event_token == tracked_token
+                and _playback_output.snapshot()['playback_output'] == 'phone'):
+            # An in-flight Started for the released current stream is not a
+            # new voice intent. It must not steal ownership back after handoff.
+            return jsonify({'ok': True, 'ignored': 'released Alexa stream', 'stop': True})
         if (event == 'started' and occurrence_token
                 and event_token == stopped_ack.get('token')):
             # A play occurrence cannot start again after it stopped. Timestamps
             # can be equal at Alexa's whole-second precision, so time alone
             # cannot reject this out-of-order Started callback.
             return jsonify({'ok': True, 'ignored': 'stopped playback occurrence'})
-        if (event == 'started' and event_token and event_token == tracked_token
-                and _playback_output.snapshot()['playback_output'] == 'phone'):
-            # An in-flight Started for the released current stream is not a
-            # new voice intent. It must not steal ownership back after handoff.
-            return jsonify({'ok': True, 'ignored': 'released Alexa stream', 'stop': True})
         if event in ('stopped', 'finished', 'failed') and event_token and tracked_token and event_token != tracked_token:
             pending_pause = _now_playing.get('_alexa_pause_pending') or {}
             output = _playback_output.snapshot()

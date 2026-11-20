@@ -110,3 +110,10 @@ class PauseCallbackOrderTests(NextTrackBase):
             'event_timestamp':datetime.fromtimestamp(102,timezone.utc).isoformat(timespec='seconds')})
         self.assertNotIn('ignored',result.json)
         self.assertTrue(server._now_playing['playing'])
+
+    def test_released_current_stream_still_requests_device_stop_after_phone_handoff(self):
+        server._now_playing.update(alexa_token=token('b'),_alexa_stop_ack={'token':token('b')})
+        self.output.update(playback_output='phone',output_token='phone-lease')
+        result=self.event('started')
+        self.assertTrue(result.json.get('stop'))
+        self.assertFalse(server._now_playing['playing'])
