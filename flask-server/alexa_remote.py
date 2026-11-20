@@ -508,7 +508,7 @@ class AlexaRemote:
             return None
         return _access_policy(getattr(self, '_musicbox_identity', OWNER), email)
 
-    async def _ensure_login(self, force_check: bool = False):
+    async def _ensure_login(self, force_check: bool = False, background_check: bool = False):
         """Ensure a usable session, reusing the stored cookie. No credentials
         are held server-side, so this can only validate/restore an existing
         session -- it never does a fresh credential login. Returns an error
@@ -525,6 +525,14 @@ class AlexaRemote:
         if not hasattr(self, '_login_task_lock'):
             self._login_task_lock = asyncio.Lock()
             
+        if background_check and not force_check and self._login and self.connection_state is True:
+            fresh = time.monotonic() - self._login_checked_at < _LOGIN_RECHECK_TTL
+            task = getattr(self, '_transport_session_refresh', None)
+            if (not fresh and (task is None or task.done())
+                    and time.monotonic() >= getattr(self, '_transport_session_check_after', 0)):
+                self._transport_session_refresh = asyncio.create_task(
+                    self._refresh_transport_session(self._login))
+            return None
         async with self._login_task_lock:
             # already have a live session in memory?
             if self._login:
@@ -1571,8 +1579,9 @@ class AlexaRemote:
             logger.exception("fresh device fetch failed; falling back to cached list")
         return await AlexaAPI.get_devices(self._login)
 
-    async def _devices(self, refresh: bool):
-        error = await self._ensure_login()
+    async def _devices(self, refresh: bool, background_check: bool = False):
+        error = (await self._ensure_login(background_check=True) if background_check
+                 else await self._ensure_login())
         self.connection_state = error is None
         if error:
             return None, error
@@ -1608,6 +1617,25 @@ class AlexaRemote:
                 return d
         return None
 
+    async def _refresh_transport_session(self, login):
+        """Read-only status refresh; never close a session underneath a command."""
+        async with self._login_task_lock:
+            if self._login is not login:
+                return
+            try:
+                valid = await asyncio.wait_for(login.test_loggedin(), timeout=3)
+            except Exception as exc:
+                if self._login is login:
+                    self._transport_session_check_after = time.monotonic() + 30
+                    if authentication_failure(exc):
+                        self._login_checked_at = 0.0
+                        self.connection_state = False
+                logger.debug('Background Amazon session status unavailable')
+                return
+            if self._login is login:
+                self._login_checked_at = time.monotonic() if valid else 0.0
+                self.connection_state = bool(valid)
+
     async def _api_for(self, serial: str, require_online: bool = False, cached_online: bool = False):
         """Returns (AlexaAPI, error string or None).
 
@@ -1616,7 +1644,8 @@ class AlexaRemote:
         either hangs or fails opaquely for one, so we reject early with a clear
         message. The cached online flag can be stale, so we refresh the device
         list once before trusting an "offline" reading."""
-        error = await self._ensure_login()
+        error = (await self._ensure_login(background_check=True) if cached_online
+                 else await self._ensure_login())
         if error:
             return None, error
         if not self._devices_raw:
@@ -1654,7 +1683,12 @@ class AlexaRemote:
 
     async def _refresh_transport_presence(self):
         try:
-            await self._devices(refresh=True)
+            session = getattr(self, '_transport_session_refresh', None)
+            if session is not None:
+                await asyncio.shield(session)
+            if getattr(self, 'connection_state', None) is False:
+                return
+            await self._devices(refresh=True, background_check=True)
         except Exception:
             logger.debug("background transport presence refresh failed", exc_info=True)
 

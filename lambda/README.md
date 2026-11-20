@@ -77,3 +77,9 @@ remain on the ordinary voice transport until their skill code is updated.
 
 Queue-only buffer synchronization keeps its existing app-selection voice control
 and queue-sync token checks; it does not use the resume/seek LaunchRequest route.
+
+For established Amazon app sessions, transport controls run the optional session
+status recheck alongside the command rather than wait for it. Account/link access
+checks still precede dispatch, the actual Amazon request remains authenticated,
+and known-rejected sessions plus explicit force/status checks still verify
+synchronously. A background check never closes or replaces an in-flight client.
