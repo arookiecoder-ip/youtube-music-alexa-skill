@@ -9957,13 +9957,15 @@ def alexa_state_event():
         logger.info('[echo-event-timing] event=%s callback_delivery_ms=%.0f',
                     event, max(0, time.time() - event_at) * 1000)
     event_token = str(body.get('token') or '')
-    if event == 'started':
+    if event in ('started', 'stopped', 'finished', 'failed'):
         parts = event_token.split('|')
         if len(parts) >= 3 and re.fullmatch(r'i[0-9a-f]{1,20}', parts[2]):
             with _np_lock:
                 intent = _now_playing.get('alexa_intent_at')
                 expected = 'i' + format(int((intent or 0) * 1000000), 'x')
-                if intent and parts[2] != expected:
+                pending_play = (_now_playing.get('playing')
+                                and _now_playing.get('playback_processing'))
+                if intent and parts[2] != expected and (event != 'stopped' or pending_play):
                     return jsonify({'ok': True, 'ignored': 'superseded playback intent'})
     if event == 'started':
         try:
@@ -10173,6 +10175,9 @@ def alexa_state_event():
             offset_in_ms = int(body.get('offset_in_ms') or 0)
         except (TypeError, ValueError):
             offset_in_ms = 0
+        parts = event_token.split('|')
+        if len(parts) >= 3 and re.fullmatch(r'i[0-9a-f]{1,20}', parts[2]):
+            logger.info('[echo-control-started] revision=%s offset_ms=%d', parts[2], offset_in_ms)
         # Keep the playing file's mtime fresh so a pause later in a long
         # session still resumes from a warm cache (see _pinned_cache_video_ids).
         # Voice next/previous advances the queue persisted by the Alexa skill.
