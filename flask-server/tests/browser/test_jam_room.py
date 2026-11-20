@@ -126,6 +126,16 @@ class JamBrowserTests(unittest.TestCase):
         member.close()
         self.assertFalse(self.errors,self.errors)
 
+    def test_single_remote_output_retains_a_player_volume_control(self):
+        self.case.join(self.case.alice,'alice','alice-phone')
+        self.case.alice.post('/api/jam/presence/',json={'device_id':'alice-phone','name':'Alice phone','status':{'volume':37}},headers={'Test-User':'alice'})
+        revision=self.case.rooms.transact('room')['revision']
+        self.case.rooms.transact('room','configure',{'command_id':'single-remote','revision':revision,'mode':'single','selected':['alice-phone']})
+        self.page.goto(self.origin+'/jam-room/')
+        expect(self.page.locator('#volumes input[type=range]')).to_have_count(1)
+        expect(self.page.locator('#volumes input[type=range]')).to_have_attribute('aria-label','Volume: Alice phone')
+        self.assertFalse(self.errors,self.errors)
+
     def test_participants_are_dismissible_and_do_not_change_playback(self):
         self.page.goto(self.origin+'/jam-room/')
         expect(self.page.locator('#participant-count')).to_contain_text('one shared queue')
