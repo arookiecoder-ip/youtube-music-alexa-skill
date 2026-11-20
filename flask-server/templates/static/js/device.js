@@ -603,14 +603,15 @@
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeJamModal(); });
 
     if (startBtn) startBtn.addEventListener('click', async () => {
-      startBtn.disabled = true;
+      startBtn.disabled = true;startBtn.setAttribute('aria-busy','true');
       const deviceId = window.browserPlayback ? window.browserPlayback.id : '';
       try { renderJam(await api('/alexa/jam/start/', { device_id: deviceId })); location.assign('/jam-room/'); }
       catch (e) { toast(e.message, 'error'); }
-      finally { startBtn.disabled = false; }
+      finally { startBtn.disabled = false;startBtn.removeAttribute('aria-busy'); }
     });
 
     if (refreshBtn) refreshBtn.addEventListener('click', async () => {
+      if(!confirm('Replace the invitation? The previous link will stop working.'))return;
       refreshBtn.disabled = true;
       const deviceId = window.browserPlayback ? window.browserPlayback.id : '';
       try { renderJam(await api('/alexa/jam/start/', { device_id: deviceId })); toast('Jam link refreshed - old link revoked', 'ok'); }
@@ -674,8 +675,10 @@
 
     const endBtn = document.getElementById('jam-end-btn');
     if (endBtn) endBtn.addEventListener('click', async () => {
-      try { renderJam(await api(window.jamIsHost ? '/alexa/jam/stop/' : '/api/jam/leave/', {})); toast('Jam ended - guest access revoked', 'ok'); }
-      catch (e) { toast(e.message, 'error'); }
+      if(!confirm(window.jamIsHost?'End this Jam for everyone?':'Leave this Jam?'))return;
+      endBtn.disabled=true;endBtn.setAttribute('aria-busy','true');
+      try { renderJam(await api(window.jamIsHost ? '/alexa/jam/stop/' : '/api/jam/leave/', {})); toast(window.jamIsHost?'Jam ended':'You left the Jam', 'ok'); }
+      catch (e) { toast(e.message, 'error'); } finally {endBtn.disabled=false;endBtn.removeAttribute('aria-busy');}
     });
 
     api('/api/jam/state/').then(renderJam).catch(() => setJamLiveIndicator(false));
