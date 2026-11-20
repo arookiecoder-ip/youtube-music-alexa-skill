@@ -4,11 +4,27 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 from player_state import IDENTITY
 from playback_store import PlaybackPersistence, PlaybackStore, stable_queue_entries
 
 class PlaybackStoreTests(unittest.TestCase):
+    def test_paused_seek_survives_restart_inside_heartbeat_coalescing_window(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch('playback_store.time.monotonic', return_value=100):
+            path = directory + '/state.db'
+            store = PlaybackStore(path)
+            state = {'queue': stable_queue_entries([{'video_id': 'a'}]), 'video_id': 'a',
+                     'queue_index': 0, 'playing': False, 'playback_revision': 5}
+            output = {'playback_output': 'alexa', 'output_serial': 'echo'}
+            store.save('owner', state, output, 30000)
+            state['playback_revision'] = 6
+            store.save('owner', state, output, 90000)
+            self.assertEqual(PlaybackStore(path).load('owner')['position_ms'], 90000)
+            # Ordinary same-revision heartbeats retain the write throttle.
+            store.save('owner', state, output, 91000)
+            self.assertEqual(PlaybackStore(path).load('owner')['position_ms'], 90000)
+
     def test_duplicate_occurrences_have_stable_distinct_ids(self):
         rows = stable_queue_entries([{'video_id': 'a'}, {'video_id': 'a'}])
         self.assertNotEqual(rows[0]['entry_id'], rows[1]['entry_id'])
