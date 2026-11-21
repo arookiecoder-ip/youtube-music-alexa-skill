@@ -71,6 +71,7 @@ export function createResolver({ createClient = options => Innertube.create(opti
   const reset = () => { session = undefined; pending = new Map(); cache = new Map(); };
   const scope = new AsyncLocalStorage();
   const resolve = async function resolve(message) {
+    if (scope.getStore()?.aborted) throw new Error('resolve_timeout');
     if (message.action !== 'init' && !/^[A-Za-z0-9_-]{11}$/.test(message.video_id || ''))
       throw new Error('invalid_video');
     const path = message.cookie_file || '';

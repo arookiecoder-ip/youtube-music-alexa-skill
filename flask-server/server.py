@@ -4341,9 +4341,8 @@ def _error_code_for_status(status: int) -> str:
 # Phase 12: Request logging middleware -- logs method, path, status, duration for every request.
 @app.after_request
 def _log_request(response):
-    path = request.path
-    if request.url_rule and any(marker in request.url_rule.rule for marker in ("<token>", "<secret>")):
-        path = request.url_rule.rule
+    # Route templates cannot contain credentials embedded in path parameters.
+    path = request.url_rule.rule if request.url_rule else '/unmatched'
     # Skip static files and SSE streams to keep logs readable
     if path.startswith('/static/') or path == '/alexa/now_playing/stream':
         return response
@@ -4359,14 +4358,14 @@ def _log_request(response):
                 code = body['error'].get('code', '')
                 if code:
                     extra = f' code={code}'
-            elif isinstance(body.get('error'), str):
-                extra = f" msg={body['error'][:60]!r}"
         except Exception:
             pass
-    args = request.args.to_dict()
-    for sensitive in ('key', 'cap', 'token', 'access_token', 'code'):
-        if sensitive in args:
-            args[sensitive] = '***'
+    # An allowlist also covers new/unknown credential query names. Never print
+    # search text, URLs, account identifiers or sign-in proofs to stdout.
+    args = {key: (value if (key == 'video_id' and _valid_video_id(value)) or
+                   (key in {'wait', 'info', 'prefetch', 'audio_check', 'limit', 'offset', 'queue_version'}
+                    and re.fullmatch(r'[0-9]{1,12}', value)) else '***')
+            for key, value in request.args.items()}
     logger.info('[%s] %s %s -> %s%s (%.1fms)', request.method, path,
                 args or '', response.status_code, extra,
                 duration * 1000)

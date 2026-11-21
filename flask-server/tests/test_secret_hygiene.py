@@ -132,6 +132,13 @@ class SecretHygiene(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
 
 
+    def test_unknown_query_credentials_searches_and_unmatched_paths_are_not_logged(self):
+        with server.app.test_request_context('/unknown/private-path-proof?password=hidden-pass&custom_credential=hidden-value&q=private-search'), mock.patch.object(server.logger, 'info') as log:
+            server._log_request(server.app.response_class('ok'))
+            logged = repr(log.call_args)
+            for private in ('private-path-proof', 'hidden-pass', 'hidden-value', 'private-search'):
+                self.assertNotIn(private, logged)
+
 if __name__ == "__main__":
     unittest.main()
 

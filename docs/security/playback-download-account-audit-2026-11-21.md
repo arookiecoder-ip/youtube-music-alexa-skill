@@ -19,6 +19,7 @@ Scope: production backend based on `d7b018b`, Android based on `8280da5`, Lambda
 | Library ERROR logs were discarded with noisy INFO logs | Retain ERROR/CRITICAL library records | Journal/alert integration test |
 | Account screen hierarchy and device labels were weak | Stronger section headings, restrained surface contrast, current-device badge and app-friendly labels | Android UI regression and screenshot artifacts |
 | Supported-links configuration was exposed as an app setting | Remove row, preserve manifest filters and routing | Existing app-link tests |
+| Request stdout logging could retain new/unknown query credentials or unmatched path proofs | Log route templates and allowlisted nonsecret query values; omit error-body text | Secret-hygiene regressions |
 | Documentation named old branches/releases and schema constant lagged migrations | Update production docs and schema version to 16 | Migration and source review |
 
 ## Verification and cleanup
