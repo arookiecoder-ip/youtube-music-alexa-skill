@@ -84,7 +84,7 @@ jobs:
     if: ${{ github.ref == 'refs/heads/master' && (github.event_name == 'push' || inputs.deploy) }}
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/download-artifact@v4
         with:

@@ -68,3 +68,7 @@ native account flows use `/accounts/amazon` and the authenticated
 `/alexa/proxy_authorize/` authorization endpoint; it does not bypass or disable
 Cloudflare's interstitial. Old proxy bookmarks should be replaced with Account →
 Services. Removing Cloudflare's warning itself requires Cloudflare's review.
+
+## Retrying a slow image transfer
+
+Backend deployment has a 45-minute transfer/installation window. If a tested build exists but its deployment was interrupted, use the **Deploy previously tested backend image** Actions workflow on `master`, supplying the original backend workflow run ID and full revision SHA. It validates repository/branch/workflow provenance and successful build status, checks the archive checksum, and sends the same image through the restricted SSH deploy command. The host verifies image revision/user and health with rollback; no server build occurs. Do not rebuild merely to retry a slow transport.
