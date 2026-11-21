@@ -7401,6 +7401,15 @@ def alexa_account_identity():
         if callable(remember):
             remember(request.headers.get('X-MusicBox-Application-Id'))
     payload = {'binding': binding['version']}
+    if kind == 'LaunchRequest' and request.environ.get('musicbox.alexa_token_authorized'):
+        from alexa_state_migration import instruction
+        migration = instruction('/data/alexa-skill-export.json',
+            account_id=request.environ.get('musicbox.alexa_identity'),
+            skill_id=request.headers.get('X-MusicBox-Application-Id'),
+            backend_url=request.url_root)
+        if migration:
+            payload['migration'] = migration
+            return jsonify(payload)
     with _np_lock:
         intent = _now_playing.get('alexa_intent_at')
         if intent and _now_playing.get('playback_processing'):

@@ -1,10 +1,9 @@
-import logging, os, boto3, data, re, time
+import logging, os, data, re, time
 import ask_sdk_core.utils as ask_utils
 from ask_sdk_core.skill_builder import CustomSkillBuilder
 from ask_sdk_core.api_client import DefaultApiClient
 from ask_sdk_core.dispatch_components import AbstractRequestHandler, AbstractExceptionHandler, AbstractResponseInterceptor, AbstractRequestInterceptor
 from ask_sdk_core.handler_input import HandlerInput
-from ask_sdk_dynamodb.adapter import DynamoDbAdapter
 from ask_sdk_model import Response
 from mediaUtils import player
 from dataclasses import asdict
@@ -16,9 +15,19 @@ logger.setLevel(logging.INFO)
 
 ddb_region = os.environ.get('DYNAMODB_PERSISTENCE_REGION')
 ddb_table_name = os.environ.get('DYNAMODB_PERSISTENCE_TABLE_NAME')
-ddb_resource = boto3.resource('dynamodb', region_name=ddb_region)
-dynamodb_adapter = DynamoDbAdapter(table_name=ddb_table_name, create_table=False, dynamodb_resource=ddb_resource,
-                                  partition_keygen=persistence_key)
+if os.environ.get('MUSICBOX_PERSISTENCE_MODE', 'dynamodb') == 'sqlite':
+    from persistence import SQLiteAdapter
+    dynamodb_adapter = SQLiteAdapter(os.environ['MUSICBOX_SKILL_DB'],
+                                    os.environ['MUSICBOX_ACCOUNT_ID'],
+                                    os.environ['MUSICBOX_SKILL_ID'])
+elif os.environ.get('MUSICBOX_PERSISTENCE_MODE', 'dynamodb') == 'dynamodb':
+    import boto3
+    from ask_sdk_dynamodb.adapter import DynamoDbAdapter
+    ddb_resource = boto3.resource('dynamodb', region_name=ddb_region)
+    dynamodb_adapter = DynamoDbAdapter(table_name=ddb_table_name, create_table=False, dynamodb_resource=ddb_resource,
+                                      partition_keygen=persistence_key)
+else:
+    raise RuntimeError('Unsupported skill persistence mode')
 
 sb = CustomSkillBuilder(persistence_adapter = dynamodb_adapter, api_client=DefaultApiClient())
 
@@ -39,6 +48,12 @@ class LaunchRequestHandler(AbstractRequestHandler):
     def handle(self, handler_input: HandlerInput) -> Response:
         logger.info("In LaunchRequestHandler")
         envelope = handler_input.request_envelope
+        migration = getattr(envelope, '_musicbox_state_migration', None)
+        if migration:
+            from state_migration import export_state
+            result = export_state(migration, envelope.context.system.application.application_id)
+            logger.info('Skill state export completed: rows=%s', result['count'])
+            return handler_input.response_builder.set_should_end_session(True).response
         if getattr(envelope, '_musicbox_launch_control', '') == 'cancelled':
             return handler_input.response_builder.set_should_end_session(True).response
         if getattr(envelope, '_musicbox_launch_control', '') == 'resume':
@@ -873,6 +888,8 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
         if (request_type.startswith('AudioPlayer.') or token) and not token.endswith('|b' + binding):
             raise SkillAuthorizationError('This playback belongs to an earlier Echo account binding.', code='stale_alexa_binding')
         envelope._musicbox_binding = binding
+        if kind == 'LaunchRequest' and isinstance(result.get('migration'), dict):
+            envelope._musicbox_state_migration = result['migration']
         envelope._musicbox_control_revision = result.get('control_revision')
         envelope._musicbox_control_video = result.get('control_video')
         # Request-local only: never persist a capability or reuse it across events.
@@ -893,6 +910,8 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
 
 class LoadPersistenceAttributesRequestInterceptor(AbstractRequestInterceptor):
     def process(self, handler_input: HandlerInput):
+        if getattr(handler_input.request_envelope, '_musicbox_state_migration', None):
+            return
         if getattr(handler_input.request_envelope, '_musicbox_launch_control', '') == 'cancelled':
             return
         if not needs_state(handler_input.request_envelope):
