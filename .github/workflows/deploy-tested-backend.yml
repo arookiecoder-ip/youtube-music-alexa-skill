@@ -1,0 +1,85 @@
+name: Deploy previously tested backend image
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Backend build workflow run containing the tested image
+        required: true
+        type: string
+      revision:
+        description: Full master commit SHA recorded by that workflow
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: production-prebuilt-backend-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Verify image provenance and successful build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          REVISION: ${{ inputs.revision }}
+        run: |
+          set -eu
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$REVISION" =~ ^[a-f0-9]{40}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" > jobs.json
+          python3 - <<'PY'
+          import json, os
+          run = json.load(open('run.json'))
+          jobs = json.load(open('jobs.json'))['jobs']
+          assert run['head_sha'] == os.environ['REVISION']
+          assert run['head_branch'] == 'master' and run['event'] == 'push'
+          assert run['head_repository']['full_name'] == os.environ['GITHUB_REPOSITORY']
+          assert run['path'] == '.github/workflows/signup-build-deploy.yml'
+          assert any(job['name'] == 'build' and job['conclusion'] == 'success' for job in jobs)
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          name: signup-backend-image
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Check artifact and prepare restricted deployment identity
+        env:
+          DEPLOY_KEY: ${{ secrets.MUSICBOX_DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEYS: ${{ secrets.MUSICBOX_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          test -n "$DEPLOY_KEY" && test -n "$DEPLOY_HOST_KEYS"
+          sha256sum --check backend.tar.gz.sha256
+          umask 077
+          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$DEPLOY_HOST_KEYS" > "$RUNNER_TEMP/deploy_known_hosts"
+      - name: Deploy the tested image without rebuilding it
+        env:
+          DEPLOY_HOST: ${{ secrets.MUSICBOX_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.MUSICBOX_DEPLOY_USER }}
+          REVISION: ${{ inputs.revision }}
+        run: |
+          set -eu
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/deploy_known_hosts" \
+            -i "$RUNNER_TEMP/deploy_key" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "deploy $REVISION" < backend.tar.gz
+      - name: Verify public readiness and authentication boundary
+        run: |
+          set -eu
+          test "$(curl -sS -o /dev/null -w '%{http_code}' https://alexa.synthora.in/health/ready)" = 200
+          test "$(curl -sS -o /dev/null -w '%{http_code}' https://alexa.synthora.in/alexa/proxy_authorize/)" = 401
+      - name: Remove temporary SSH identity
+        if: always()
+        run: rm -f "$RUNNER_TEMP/deploy_key"
