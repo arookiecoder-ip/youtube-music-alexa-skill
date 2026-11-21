@@ -36,10 +36,8 @@ def state_key(event, binding):
 def _ddb():
     global _client
     if _client is None:
-        import boto3
-        from botocore.config import Config
-        _client = boto3.client('dynamodb', region_name=os.environ['DYNAMODB_PERSISTENCE_REGION'],
-            config=Config(connect_timeout=1, read_timeout=1, retries={'max_attempts': 0}))
+        from dynamo_http import DynamoHTTP
+        _client = DynamoHTTP(os.environ['DYNAMODB_PERSISTENCE_REGION'], skill_bootstrap.http_client())
     return _client
 
 

@@ -71,3 +71,30 @@ with patch.object(runtime_relay,'_ddb') as db,patch.object(skill_bootstrap,'_fet
  db.assert_not_called()
  assert not getattr(skill_bootstrap._pending,'item',None)
 ''')
+
+    def test_actual_dynamo_http_relay_imports_no_aws_or_ask_sdk(self):
+        self.run_case('''
+import json,sys,os
+from types import SimpleNamespace as NS
+from unittest.mock import Mock,patch
+import lambda_function,skill_bootstrap,runtime_relay
+from fixtures import event,SECRET,BINDING
+os.environ.update(AWS_ACCESS_KEY_ID='synthetic-key',AWS_SECRET_ACCESS_KEY='synthetic-aws-secret',AWS_SESSION_TOKEN='synthetic-session-token')
+http=Mock();aws_calls=[]
+def send(method,url,**kw):
+ if url.startswith('https://dynamodb.'):
+  aws_calls.append(url)
+  return NS(status=200,headers={},read=lambda n:b'{}',close=lambda:None,release_conn=lambda:None)
+ assert 'synthetic-aws-secret' not in str(kw)
+ assert 'synthetic-session-token' not in str(kw)
+ raw=json.dumps({'dirty':False,'response':{'version':'1.0','response':{}}}).encode()
+ h=kw['headers']
+ return NS(status=200,data=raw,headers={'X-MusicBox-Relay-Signature':runtime_relay.signature(SECRET,h['X-MusicBox-Relay-Time'],h['X-MusicBox-Relay-Nonce'],raw,response=True)})
+http.request.side_effect=send
+with patch.object(skill_bootstrap,'_fetch',return_value=NS(status=200,data=json.dumps({'binding':BINDING}).encode())),patch.object(skill_bootstrap,'http_client',return_value=http):
+ response=lambda_function.lambda_handler(event(),None)
+ assert response['version']=='1.0'
+ assert lambda_function._runtime is None
+ assert len(aws_calls)==1
+ assert not any(k.startswith(('ask_sdk','boto3','botocore')) for k in sys.modules)
+''')

@@ -6,12 +6,14 @@ state. Both Echos keep their existing settings, saved playlists and playback
 records, including devices currently offline. No account or state migration,
 new AWS resource, periodic invocation or synthetic playback is required.
 
-Normal successful Lambda requests do not import the ASK SDK. A small relay:
+Normal successful Lambda requests import neither the ASK SDK nor boto3/botocore. A small relay:
 
 1. Authorizes the current Alexa envelope through the existing backend identity
    endpoint, including fresh Amazon profile proof and current account policy.
 2. Consistently reads only that request's existing skill/user/device/binding key
-   using the Lambda execution role. AWS credentials stay inside Lambda.
+   through bounded SigV4-signed DynamoDB HTTP calls using the Lambda execution
+   role. The signer is checked against AWS botocore test vectors, including
+   temporary credentials. AWS credentials stay inside Lambda.
 3. Sends the envelope, this request's authorization response and attributes to
    the persistent SDK service, authenticated with a separate private HMAC secret.
 4. Verifies the signed response and conditionally saves changed attributes to
@@ -45,6 +47,7 @@ restarts. Conflicting request-ID reuse fails. This provides at-most-once dispatc
 not exactly-once delivery: a crash can suppress one request, recovered by the
 existing app watchdog or a new user command with a new Alexa request ID.
 
+DynamoDB responses are size bounded and CRC32 checked when AWS supplies a checksum.
 DynamoDB conditional writes fence concurrent whole-item saves. A stale write or
 failed durable save never returns its playback directive. Unknown item fields
 and DynamoDB numeric types are retained. Authorization denials use the existing
