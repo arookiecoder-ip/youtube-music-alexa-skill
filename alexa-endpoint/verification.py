@@ -133,6 +133,8 @@ class Verifier:
         try:
             signature = base64.b64decode(signature, validate=True)
             self._certificate(url).verify(signature, raw, padding.PKCS1v15(), hashes.SHA256())
+        except VerificationError:
+            raise
         except Exception as exc:
             raise VerificationError('signature verification') from exc
         event = strict_json(raw)

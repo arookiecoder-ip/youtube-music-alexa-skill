@@ -90,7 +90,8 @@ def create_app(adapter, handler, verifier, *, migration_token='', migration_expi
         raw = request.get_data()
         try:
             event = verifier.verify(raw, request.headers)
-        except VerificationError:
+        except VerificationError as exc:
+            logging.getLogger(__name__).warning('Rejected Alexa HTTPS request: %s', exc)
             return '', 400
         if not adapter.ready():
             return '', 503, {'Retry-After': '2'}
