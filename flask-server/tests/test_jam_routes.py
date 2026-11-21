@@ -92,6 +92,16 @@ class JamRouteTests(unittest.TestCase):
         for field in ('entry_id', 'queue', 'position_ms', 'transport_revision', 'seek_revision'):
             self.assertEqual(after[field], before[field], field)
 
+    def test_phone_join_retry_after_cookie_renewal(self):
+        payload = {'device_id': 'alice-phone', 'listen': True, 'name': 'Phone'}
+        for attempt in range(3):
+            client = self.app.test_client()
+            response = client.post('/j/room', json=payload, headers={'Test-User': 'alice'})
+            self.assertEqual(response.status_code, 200)
+            response = client.post('/api/jam/presence/', json={'device_id': 'alice-phone', 'name': 'Phone'}, headers={'Test-User': 'alice'})
+            self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.members.list('room')), 1)
+
     def test_invitation_get_shows_consent_without_joining(self):
         response=self.alice.get('/j/room',headers={'Test-User':'alice'})
         self.assertEqual(response.status_code,200)

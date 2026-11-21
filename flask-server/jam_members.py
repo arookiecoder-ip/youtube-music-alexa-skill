@@ -20,8 +20,22 @@ class JamMembers:
     def join(self, token, user_id, name, device_id='', previous=None):
         self.ensure()
         with self.database() as db:
+            # Serialize retries from separate workers before looking up membership.
+            db.execute('BEGIN IMMEDIATE')
             if user_id and db.execute('SELECT 1 FROM jam_members WHERE token=? AND user_id=? AND removed=1', (token, user_id)).fetchone():
                 raise PermissionError('The host removed you from this Jam.')
+            # App login cookies can be renewed without retaining jam_member.
+            # Recover this identity's original device membership so its persisted
+            # output remains owned by the same participant, including after leave.
+            if user_id and device_id:
+                row = db.execute(
+                    'SELECT id FROM jam_members WHERE token=? AND user_id=? '
+                    'AND device_id=? AND removed=0 ORDER BY created_at, id LIMIT 1',
+                    (token, user_id, device_id)).fetchone()
+                if row:
+                    db.execute('UPDATE jam_members SET left_room=0 WHERE id=?', (row['id'],))
+                    db.commit()
+                    return row['id']
             if previous:
                 row = db.execute('SELECT * FROM jam_members WHERE id=? AND token=?', (previous, token)).fetchone()
                 if row and row['user_id'] == user_id:
