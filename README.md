@@ -47,19 +47,23 @@ Build Android APKs and backend images in GitHub Actions. The server receives tes
 ```mermaid
 flowchart LR
     Clients[Browser and Android] --> Caddy[HTTPS / Caddy]
-    Caddy --> Flask[Flask / one Waitress process]
+    Caddy --> Gateway[Async HTTP and playback-event gateway]
+    Gateway --> Flask[Flask / shared process and Waitress pools]
     Flask --> Node[Private persistent YouTube.js worker]
     Node --> YouTube[YouTube Music and media servers]
     Flask --> DB[SQLite / persistent metadata]
     Flask --> Amazon[AlexaPy / Amazon session]
     Amazon --> Echo[Echo]
     Echo --> Lambda[Custom skill / AWS Lambda]
-    Lambda --> Flask
+    Lambda --> Runtime[Persistent private Alexa runtime]
+    Runtime --> Flask
     Caddy --> Browser[Protected Chromium sign-in surface]
     Flask --> Browser
 ```
 
 The [Compose file](docker-compose.yml) keeps the browser exclusively on private `musicbox-egress` networking. [Caddyfile.example](Caddyfile.example) reaches `ytmusic:5000` and the owner/attempt-authorized Amazon proxy on `ytmusic:5001`. Google sign-in uses the authenticated, owner-leased touch/frame API through Flask; there is no VNC listener. Its private controller remains `http://youtube-browser:8765`. The browser drops to UID 10001 after initializing ownership of an existing profile volume. Application startup and incoming API traffic do not depend on Gluetun.
+
+The container entrypoint is `realtime_gateway.py`: an async HTTP/WebSocket gateway forwards ordinary HTTP and audio to a 16-thread loopback Waitress listener and reserves a separate four-thread listener for playback control. Both listeners use the same Flask application and process-local playback authority. The Alexa Lambda can relay signed requests to the persistent private runtime; AWS persistence credentials remain in Lambda.
 
 Outbound Python, Alexa, Node/YouTube and Chromium requests use a private HTTP CONNECT gateway. It prefers the optional VPN endpoint, falls back to normal networking if connection setup fails within 1.5 seconds, and retries VPN after a 10-second cooldown. TLS remains end to end. Existing interrupted streams reconnect through the normal media retry/Range paths; the gateway does not replay commands or partially sent requests.
 
