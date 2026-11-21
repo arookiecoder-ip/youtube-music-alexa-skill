@@ -24,7 +24,7 @@ class Export(TestCase):
         http = mock.Mock()
         http.request.return_value = NS(status=200, data=json.dumps({'ok':True, 'count':1, 'digest':'hash'}).encode())
         with mock.patch('boto3.client', return_value=db), mock.patch('urllib3.PoolManager', return_value=http):
-            self.assertEqual(state_migration.export_state(self.instruction, 's')['count'], 1)
+            self.assertEqual(state_migration._transfer(self.instruction, 's')['count'], 1)
         self.assertEqual(db.scan.call_count, 2)
         self.assertTrue(db.scan.call_args.kwargs['ConsistentRead'])
         self.assertFalse(http.request.call_args.kwargs['redirect'])
@@ -36,7 +36,7 @@ class Export(TestCase):
                              ('url','https://evil/alexa/skill/migration/'),
                              ('url','http://music.example/alexa/skill/migration/')]:
             with self.subTest(field=field), mock.patch('boto3.client') as aws, self.assertRaises(ValueError):
-                state_migration.export_state(dict(self.instruction, **{field:value}), 's')
+                state_migration._transfer(dict(self.instruction, **{field:value}), 's')
             aws.assert_not_called()
 
     def test_incomplete_or_denied_scan_never_activates_receiver(self):
@@ -45,7 +45,7 @@ class Export(TestCase):
             db.scan.side_effect = effect
             db.scan.return_value = {'Items': [], 'LastEvaluatedKey': {'id': {'S':'x'}}}
             with self.subTest(), mock.patch('boto3.client',return_value=db), mock.patch('urllib3.PoolManager') as http, self.assertRaises(RuntimeError):
-                state_migration.export_state(self.instruction, 's')
+                state_migration._transfer(self.instruction, 's')
             http.assert_not_called()
 
     def test_receiver_errors_fail_export(self):
@@ -53,7 +53,7 @@ class Export(TestCase):
         for response in (NS(status=503,data=b''), NS(status=200,data=b'{"ok":true,"count":1}')):
             http=mock.Mock();http.request.return_value=response
             with mock.patch('boto3.client',return_value=db), mock.patch('urllib3.PoolManager',return_value=http), self.assertRaises(RuntimeError):
-                state_migration.export_state(self.instruction,'s')
+                state_migration._transfer(self.instruction,'s')
 
     def test_restore_scope_checked_before_any_write(self):
         class Response:
@@ -64,7 +64,7 @@ class Export(TestCase):
             def release_conn(self): pass
         db=mock.Mock();http=mock.Mock();http.request.return_value=Response()
         with mock.patch('boto3.client',return_value=db), mock.patch('urllib3.PoolManager',return_value=http), self.assertRaises(ValueError):
-            state_migration.export_state(dict(self.instruction,action='restore'),'s')
+            state_migration._transfer(dict(self.instruction,action='restore'),'s')
         db.put_item.assert_not_called()
 
     def test_restore_validates_all_rows_before_writing(self):
@@ -78,7 +78,7 @@ class Export(TestCase):
                 def release_conn(self): pass
             db=mock.Mock();http=mock.Mock();http.request.return_value=Response()
             with mock.patch('boto3.client',return_value=db), mock.patch('urllib3.PoolManager',return_value=http), self.assertRaises((ValueError,KeyError)):
-                state_migration.export_state(dict(self.instruction,action='restore'),'s')
+                state_migration._transfer(dict(self.instruction,action='restore'),'s')
             db.put_item.assert_not_called()
 
     def test_restore_writes_only_own_table(self):
@@ -91,5 +91,16 @@ class Export(TestCase):
             def release_conn(self): pass
         db=mock.Mock();http=mock.Mock();http.request.return_value=Response()
         with mock.patch('boto3.client',return_value=db), mock.patch('urllib3.PoolManager',return_value=http):
-            self.assertEqual(state_migration.export_state(dict(self.instruction,action='restore'),'s')['count'],1)
+            self.assertEqual(state_migration._transfer(dict(self.instruction,action='restore'),'s')['count'],1)
         db.put_item.assert_called_once_with(TableName='table',Item=row)
+
+    def test_export_reports_only_sanitized_failure(self):
+        http=mock.Mock()
+        with mock.patch.object(state_migration,'_transfer',side_effect=RuntimeError('private detail')), mock.patch('urllib3.PoolManager',return_value=http), self.assertRaises(RuntimeError):
+            state_migration.export_state(self.instruction,'s')
+        self.assertEqual(http.request.call_count,2)
+        body=json.loads(http.request.call_args.kwargs['body'])
+        self.assertEqual(body['phase'],'failed')
+        self.assertEqual(body['code'],'RuntimeError')
+        self.assertNotIn('private detail',str(body))
+        self.assertNotIn('token',body)

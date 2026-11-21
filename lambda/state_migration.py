@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 import data
 
 
-def export_state(instruction, application_id):
+def _transfer(instruction, application_id):
     target = urlsplit(instruction['url'])
     origin = urlsplit(data.MUSICBOX_SERVER_URL)
     if (instruction['account_id'] != data.MUSICBOX_ACCOUNT_ID
@@ -82,3 +82,31 @@ def export_state(instruction, application_id):
     if not result.get('ok') or result.get('count') != len(items):
         raise RuntimeError('migration acknowledgement mismatch')
     return {'count': len(items), 'digest': result['digest']}
+
+
+def export_state(instruction, application_id):
+    # Revalidate the destination before even sending diagnostics to it.
+    target, origin = urlsplit(instruction['url']), urlsplit(data.MUSICBOX_SERVER_URL)
+    if (instruction['account_id'] != data.MUSICBOX_ACCOUNT_ID or instruction['skill_id'] != application_id
+            or not time.time() < instruction['expires'] <= time.time() + 3600
+            or target.scheme != 'https' or target.netloc != origin.netloc
+            or target.username or target.password or target.query or target.fragment
+            or target.path != '/alexa/skill/migration/'):
+        raise ValueError('invalid migration scope')
+    def report(phase, code=''):
+        try:
+            import urllib3
+            payload = {key: instruction[key] for key in ('account_id', 'skill_id', 'transfer_id')}
+            payload.update(phase=phase, code=code)
+            urllib3.PoolManager().request('POST', instruction['url'], body=json.dumps(payload).encode(),
+                headers={'Content-Type':'application/json','X-MusicBox-Migration':instruction['token']},
+                timeout=urllib3.Timeout(total=2), retries=False, redirect=False)
+        except Exception:
+            pass
+    report('started')
+    try:
+        return _transfer(instruction, application_id)
+    except Exception as exc:
+        code = getattr(exc, 'response', {}).get('Error', {}).get('Code', type(exc).__name__)
+        report('failed', code)
+        raise

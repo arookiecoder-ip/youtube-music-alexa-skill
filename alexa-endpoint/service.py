@@ -64,6 +64,13 @@ def create_app(adapter, handler, verifier, *, migration_token='', migration_expi
             if (payload['account_id'] != adapter.account_id or payload['skill_id'] != adapter.skill_id
                     or payload['transfer_id'] != transfer_id):
                 return '', 403
+            if payload.get('phase') in ('started', 'failed'):
+                code = payload.get('code', '')
+                if code not in ('', 'AccessDeniedException', 'ValidationException', 'RuntimeError',
+                                'ClientError', 'TypeError', 'ValueError', 'KeyError'):
+                    code = 'other'
+                logging.getLogger(__name__).warning('Skill migration phase=%s code=%s', payload['phase'], code)
+                return jsonify({'ok': True})
             digest = adapter.import_snapshot(payload['items'], transfer_id)
             return jsonify({'ok': True, 'digest': digest, 'count': len(payload['items'])})
         except (KeyError, TypeError, ValueError):
@@ -71,6 +78,7 @@ def create_app(adapter, handler, verifier, *, migration_token='', migration_expi
 
     @app.post('/alexa/skill/')
     def skill():
+        started = time.monotonic()
         if request.content_length is not None and request.content_length > 512 * 1024:
             return '', 413
         raw = request.get_data()
@@ -88,7 +96,11 @@ def create_app(adapter, handler, verifier, *, migration_token='', migration_expi
         try:
             if not adapter.claim_request(event['request']['requestId'], hashlib.sha256(raw).hexdigest(), time.time()):
                 return jsonify(quiet)
-            return jsonify(handler(event, None))
+            response = handler(event, None)
+            logging.getLogger(__name__).info('Alexa verified request type=%s dispatch_ms=%.0f',
+                str(event['request'].get('type', ''))[:80].replace('\n', ''),
+                (time.monotonic() - started) * 1000)
+            return jsonify(response)
         except ValueError:
             return '', 400
         except Exception:
@@ -109,6 +121,7 @@ def create_app(adapter, handler, verifier, *, migration_token='', migration_expi
 
 def main():
     # Private configuration is loaded before handler modules; never print it.
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
     os.environ['MUSICBOX_PERSISTENCE_MODE'] = 'sqlite'
     from skill_runtime import dynamodb_adapter, lambda_handler
     from waitress import serve
