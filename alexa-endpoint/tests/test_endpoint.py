@@ -209,12 +209,12 @@ class LambdaRelay(unittest.TestCase):
         self.env=mock.patch.dict(os.environ,DYNAMODB_PERSISTENCE_TABLE_NAME='own-table',DYNAMODB_PERSISTENCE_REGION='eu-west-1')
         self.env.start();self.addCleanup(self.env.stop)
 
-    def invoke(self, *, result=None, row=None, status=200, tamper=False, ddb_error=None):
+    def invoke(self, *, result=None, row=None, status=200, tamper=False, ddb_error=None, remaining=8000):
         e=event();self.db=mock.Mock();self.db.get_item.return_value={'Item':row} if row else {}
         self.db.put_item.side_effect=ddb_error
         key=state_key(e,BINDING)
         result=result or {'response':{'version':'1.0','response':{}},'key':key,'dirty':True,'attributes':{'M':{'saved':{'S':'yes'}}}}
-        http=mock.Mock()
+        http=mock.Mock();self.http=http
         def send(method,url,**kwargs):
             self.sent=json.loads(kwargs['body'])
             raw=json.dumps(result).encode();h=kwargs['headers']
@@ -223,7 +223,7 @@ class LambdaRelay(unittest.TestCase):
         http.request.side_effect=send
         response=NS(status=200,data=json.dumps({'binding':BINDING,'control':{'kind':'resume'}}).encode())
         with mock.patch.object(runtime_relay,'_ddb',return_value=self.db), mock.patch.object(skill_bootstrap,'_fetch',return_value=response), mock.patch.object(skill_bootstrap,'http_client',return_value=http):
-            return runtime_relay.invoke(e,NS(get_remaining_time_in_millis=lambda:8000))
+            return runtime_relay.invoke(e,NS(get_remaining_time_in_millis=lambda:remaining))
 
     def test_authorize_read_dispatch_then_conditional_write(self):
         self.invoke()
@@ -233,6 +233,17 @@ class LambdaRelay(unittest.TestCase):
         self.assertEqual(kwargs['TableName'],'own-table')
         self.assertEqual(kwargs['ConditionExpression'],'attribute_not_exists(#r)')
         self.assertEqual(self.sent['identity']['control']['kind'],'resume')
+
+    def test_provider_work_gets_time_within_alexa_and_durable_save_budget(self):
+        self.invoke()
+        timeout=self.http.request.call_args.kwargs['timeout']
+        self.assertGreater(timeout.total,4)
+        self.assertLessEqual(timeout.total,6)
+
+    def test_exhausted_lambda_budget_never_dispatches_or_writes(self):
+        with self.assertRaises(TimeoutError):self.invoke(remaining=1000)
+        self.http.request.assert_not_called()
+        self.db.put_item.assert_not_called()
 
     def test_existing_revision_and_unknown_item_fields_preserved(self):
         self.invoke(row={'musicbox_runtime_revision':{'S':'old'},'future':{'S':'kept'},'attributes':{'M':{}}})

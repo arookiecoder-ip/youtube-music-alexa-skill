@@ -77,7 +77,9 @@ def invoke(event, context):
         raise ValueError('runtime relay payload exceeds bounds')
     stamp, nonce = str(int(time.time())), uuid.uuid4().hex
     remaining = getattr(context, 'get_remaining_time_in_millis', lambda: 6500)() / 1000
-    budget = min(4, remaining - 1.5)
+    # Leave room for the conditional DynamoDB save and Alexa's response limit,
+    # while allowing legitimate provider/search work beyond four seconds.
+    budget = min(6.0, remaining - 1.5, 6.0 - (time.monotonic() - started))
     if budget <= 0:
         raise TimeoutError('relay invocation budget exhausted')
     response = skill_bootstrap.http_client().request('POST', url + '/alexa/skill/relay/', body=raw,
