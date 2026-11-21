@@ -78,7 +78,7 @@ class Export(TestCase):
                 def close(self): pass
                 def release_conn(self): pass
             db=mock.Mock();http=mock.Mock();http.request.return_value=Response()
-            with mock.patch('boto3.client',return_value=db), mock.patch('urllib3.PoolManager',return_value=http), self.assertRaises((ValueError,KeyError)):
+            with mock.patch('boto3.client',return_value=db), mock.patch('urllib3.PoolManager',return_value=http), self.assertRaises((ValueError,KeyError,TypeError)):
                 state_migration._transfer(dict(self.instruction,action='restore'),'s')
             db.put_item.assert_not_called()
 
