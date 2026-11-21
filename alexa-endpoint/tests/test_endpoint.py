@@ -245,6 +245,18 @@ class Storage(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.db.import_device_snapshot([], 'other', second, 2)
 
+    def test_canary_never_initializes_an_unmigrated_device(self):
+        from skill_security import persistence_key, SkillAuthorizationError
+        env = envelope()
+        key = persistence_key(env)
+        self.db.import_device_snapshot([], 't', key, 1)
+        self.db.require_imported = True
+        self.assertEqual(self.db.get_attributes(env), {})
+        with self.assertRaises(SkillAuthorizationError):
+            self.db.get_attributes(envelope(device='unmigrated'))
+        with self.assertRaises(SkillAuthorizationError):
+            self.db.save_attributes(envelope(device='unmigrated'), {})
+
     def test_actor_lock_capacity_timeout_and_cleanup(self):
         locks = ActorLocks(capacity=1)
         self.assertEqual(locks.acquire('a'), 'a')

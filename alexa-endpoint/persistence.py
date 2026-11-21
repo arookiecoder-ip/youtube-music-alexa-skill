@@ -8,7 +8,7 @@ from contextlib import contextmanager
 
 from ask_sdk_core.attributes_manager import AbstractPersistenceAdapter
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
-from skill_security import persistence_key
+from skill_security import SkillAuthorizationError, persistence_key
 
 
 class SQLiteAdapter(AbstractPersistenceAdapter):
@@ -16,6 +16,7 @@ class SQLiteAdapter(AbstractPersistenceAdapter):
         if not account_id or not skill_id:
             raise ValueError('account and skill required')
         self.path, self.account_id, self.skill_id = path, account_id, skill_id
+        self.require_imported = os.environ.get('MUSICBOX_REQUIRE_IMPORTED_DEVICE') == '1'
         os.makedirs(os.path.dirname(os.path.abspath(path)), mode=0o700, exist_ok=True)
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
@@ -48,7 +49,15 @@ class SQLiteAdapter(AbstractPersistenceAdapter):
         app = envelope.context.system.application.application_id
         if app != self.skill_id:
             raise ValueError('application scope mismatch')
-        return persistence_key(envelope)
+        key = persistence_key(envelope)
+        if self.require_imported:
+            with self.connect() as db:
+                imported = db.execute('SELECT 1 FROM metadata WHERE account=? AND skill=? AND name=?',
+                    (self.account_id, self.skill_id, 'device:' + key)).fetchone()
+            if not imported:
+                raise SkillAuthorizationError('This Echo’s saved skill state still needs to be migrated.',
+                                              code='alexa_state_migration_required')
+        return key
 
     def ready(self):
         with self.connect() as db:
