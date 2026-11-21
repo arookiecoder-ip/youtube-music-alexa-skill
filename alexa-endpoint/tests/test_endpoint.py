@@ -106,7 +106,7 @@ class Security(unittest.TestCase):
                 self.verifier().verify(body, hdr)
 
     def test_envelope_failures(self):
-        for change in ('old', 'future', 'skill', 'session', 'missing', 'empty', 'timestamp'):
+        for change in ('old', 'future', 'skill', 'session', 'missing', 'empty', 'session_null', 'timestamp'):
             obj = event()
             if change in ('old', 'future'):
                 obj['request']['timestamp'] = (NOW + dt.timedelta(seconds=151 if change == 'future' else -151)).isoformat().replace('+00:00', 'Z')
@@ -114,6 +114,8 @@ class Security(unittest.TestCase):
                 obj['context']['System']['application']['applicationId'] = 'evil'
             elif change == 'session':
                 obj['session'] = {'application': {'applicationId': 'evil'}}
+            elif change == 'session_null':
+                obj['session'] = None
             elif change == 'missing':
                 del obj['context']['System']['device']
             elif change == 'empty':
@@ -225,6 +227,23 @@ class Storage(unittest.TestCase):
             self.assertEqual(c.post('/alexa/skill/', data=b'fail').status_code, 503)
         self.assertNotIn('private token', str(logs.output))
         self.assertEqual(c.get('/alexa/skill/').status_code, 405)
+
+    def test_fleet_import_remains_unready_until_all_devices_and_preserves_playlists(self):
+        first, second = 'echo-v2:'+'a'*64, 'echo-v2:'+'b'*64
+        row = {'id':{'S':first}, 'attributes':{'M':{'saved_playlists':{'L':[{'S':'playlist'}]}}}}
+        digest = self.db.import_device_snapshot([row], 't', first, 2)
+        self.assertFalse(self.db.ready())
+        self.assertEqual(self.db.import_device_snapshot([row], 't', first, 2), digest)
+        self.assertFalse(self.db.ready())
+        with self.assertRaises(ValueError):
+            self.db.import_device_snapshot([row], 't', second, 2)
+        self.assertFalse(self.db.ready())
+        self.db.import_device_snapshot([], 't', second, 2)
+        self.assertTrue(self.db.ready())
+        self.assertEqual(self.db.export_snapshot(), [row])
+        self.db.import_device_snapshot([row], 't', first, 2)
+        with self.assertRaises(ValueError):
+            self.db.import_device_snapshot([], 'other', second, 2)
 
     def test_actor_lock_capacity_timeout_and_cleanup(self):
         locks = ActorLocks(capacity=1)

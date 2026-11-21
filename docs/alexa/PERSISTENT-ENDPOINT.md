@@ -49,7 +49,13 @@ control watchdogs and a new user action recover with a new request ID.
    instruction support. No AWS credentials leave the existing Lambda.
 5. Operator creates `/data/alexa-skill-export.json` in the backend, mode0600, with
    `account_id`, `skill_id`, `transfer_id`, `token`, `expires`, and `url` pointing
-   to the same backend origin's `/alexa/skill/migration/`. Only an authenticated,
+   to the same backend origin's `/alexa/skill/migration/`. For Alexa-hosted roles,
+   also set `mode: device` and `expected_devices` to the full number of Echos
+   being retained. Hosted roles deny Scan; device mode consistently reads only
+   the current authorized skill/user/device/binding key with GetItem. Invoke
+   each retained Echo once. Offline devices must come online before cutover;
+   do not lower the count unless the operator confirms a device is retired.
+   Only an authenticated,
    matching LaunchRequest receives the instruction. Invoke one silent launch.
    Remove the instruction immediately after the export completes.
 6. The old Lambda consistently scans its own table and posts one bounded complete

@@ -154,6 +154,6 @@ class Verifier:
             for value in (actor['user']['userId'], actor['device']['deviceId']):
                 if not isinstance(value, str) or not 1 <= len(value) <= 1024:
                     raise ValueError('actor')
-        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        except (KeyError, TypeError, ValueError, OverflowError, AttributeError) as exc:
             raise VerificationError('request envelope') from exc
         return event

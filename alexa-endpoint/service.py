@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import logging
+import math
 import os
 import threading
 import time
@@ -52,7 +53,8 @@ def create_app(adapter, handler, verifier, *, migration_token='', migration_expi
     @app.route('/alexa/skill/migration/', methods=['GET', 'POST'])
     def migration():
         supplied = request.headers.get('X-MusicBox-Migration', '')
-        if (not migration_token or time.time() >= migration_expires
+        if (not migration_token or not math.isfinite(migration_expires)
+                or not time.time() < migration_expires <= time.time() + 3600
                 or not hmac.compare_digest(supplied.encode(), migration_token.encode())):
             return '', 404
         try:
@@ -71,7 +73,11 @@ def create_app(adapter, handler, verifier, *, migration_token='', migration_expi
                     code = 'other'
                 logging.getLogger(__name__).warning('Skill migration phase=%s code=%s', payload['phase'], code)
                 return jsonify({'ok': True})
-            digest = adapter.import_snapshot(payload['items'], transfer_id)
+            if 'device_key' in payload:
+                digest = adapter.import_device_snapshot(payload['items'], transfer_id,
+                    payload['device_key'], payload['expected_devices'])
+            else:
+                digest = adapter.import_snapshot(payload['items'], transfer_id)
             return jsonify({'ok': True, 'digest': digest, 'count': len(payload['items'])})
         except (KeyError, TypeError, ValueError):
             return '', 400
@@ -133,7 +139,7 @@ def main():
                      migration_expires=float(os.environ.get('MUSICBOX_MIGRATION_EXPIRES', '0')),
                      transfer_id=os.environ.get('MUSICBOX_MIGRATION_ID', ''))
     serve(app, host='0.0.0.0', port=8000, threads=8, connection_limit=64,
-          max_request_body_size=16 * 1024 * 1024, channel_timeout=15,
+          max_request_body_size=16 * 1024 * 1024, max_request_header_size=16384, channel_timeout=15,
           ident='MusicBox')
 
 

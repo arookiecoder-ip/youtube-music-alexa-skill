@@ -142,3 +142,45 @@ class SQLiteAdapter(AbstractPersistenceAdapter):
         if len(json.dumps(items).encode()) > 12 * 1024 * 1024:
             raise ValueError('snapshot too large')
         return items
+
+    def import_device_snapshot(self, items, transfer_id, device_key, expected_devices):
+        """Hosted roles permit GetItem but not Scan. Activate only the full fleet."""
+        if (not isinstance(device_key, str) or not re.fullmatch(r'echo-v2:[0-9a-f]{64}', device_key)
+                or type(expected_devices) is not int or not 1 <= expected_devices <= 32
+                or not isinstance(items, list) or len(items) > 1):
+            raise ValueError('device snapshot scope')
+        value = None
+        if items:
+            item = items[0]
+            if item['id'] != {'S': device_key} or set(item['attributes']) != {'M'}:
+                raise ValueError('device snapshot key')
+            TypeDeserializer().deserialize(item['attributes'])
+            value = json.dumps(item['attributes'], separators=(',', ':'), sort_keys=True)
+            if len(value.encode()) > 400 * 1024:
+                raise ValueError('device snapshot size')
+        digest = hashlib.sha256((value or '').encode()).hexdigest()
+        scope = (self.account_id, self.skill_id)
+        entry = json.dumps({'transfer_id': transfer_id, 'digest': digest}, sort_keys=True)
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            previous = db.execute('SELECT value FROM metadata WHERE account=? AND skill=? AND name=?',
+                                  (*scope, 'device:' + device_key)).fetchone()
+            complete = db.execute('SELECT value FROM metadata WHERE account=? AND skill=? AND name=?',
+                                  (*scope, 'import_complete')).fetchone()
+            if previous:
+                if previous[0] != entry:
+                    raise ValueError('conflicting device snapshot')
+            else:
+                if complete:
+                    raise ValueError('migration already complete')
+                if value is not None:
+                    db.execute('INSERT INTO state VALUES (?,?,?,?)', (*scope, device_key, value))
+                db.execute('INSERT INTO metadata VALUES (?,?,?,?)', (*scope, 'device:' + device_key, entry))
+            entries = db.execute("SELECT value FROM metadata WHERE account=? AND skill=? AND name LIKE 'device:%'",
+                                 scope).fetchall()
+            if any(json.loads(row[0])['transfer_id'] != transfer_id for row in entries):
+                raise ValueError('conflicting transfer')
+            if len(entries) >= expected_devices and not complete:
+                db.execute('INSERT INTO metadata VALUES (?,?,?,?)', (*scope, 'import_complete',
+                           json.dumps({'transfer_id': transfer_id, 'devices': len(entries)})))
+        return digest

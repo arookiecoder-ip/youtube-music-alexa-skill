@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 import data
 
 
-def _transfer(instruction, application_id):
+def _transfer(instruction, application_id, device_key=None):
     target = urlsplit(instruction['url'])
     origin = urlsplit(data.MUSICBOX_SERVER_URL)
     if (instruction['account_id'] != data.MUSICBOX_ACCOUNT_ID
@@ -51,6 +51,26 @@ def _transfer(instruction, application_id):
         return {'count': len(rows), 'digest': 'restored'}
     if instruction.get('action', 'export') != 'export':
         raise ValueError('invalid migration action')
+    if instruction.get('mode') == 'device':
+        import re
+        if not isinstance(device_key, str) or not re.fullmatch(r'echo-v2:[0-9a-f]{64}', device_key):
+            raise ValueError('authorized device key required')
+        expected = instruction.get('expected_devices')
+        if type(expected) is not int or not 1 <= expected <= 32:
+            raise ValueError('device count required')
+        row = client.get_item(TableName=os.environ['DYNAMODB_PERSISTENCE_TABLE_NAME'],
+                              Key={'id': {'S': device_key}}, ConsistentRead=True).get('Item')
+        payload = {key: instruction[key] for key in ('account_id', 'skill_id', 'transfer_id')}
+        payload.update(items=[row] if row else [], device_key=device_key, expected_devices=expected)
+        response = urllib3.PoolManager().request('POST', instruction['url'], body=json.dumps(payload).encode(),
+            headers={'Content-Type':'application/json','X-MusicBox-Migration':instruction['token']},
+            timeout=urllib3.Timeout(total=8), retries=False, redirect=False)
+        if response.status != 200:
+            raise RuntimeError('device snapshot rejected')
+        result = json.loads(response.data)
+        if not result.get('ok') or result.get('count') != len(payload['items']):
+            raise RuntimeError('device snapshot acknowledgement mismatch')
+        return {'count': len(payload['items']), 'digest': result['digest']}
     items, cursor, size = [], None, 0
     started = time.monotonic()
     # All-or-nothing snapshot; never activate a truncated scan. This deliberately
@@ -84,7 +104,7 @@ def _transfer(instruction, application_id):
     return {'count': len(items), 'digest': result['digest']}
 
 
-def export_state(instruction, application_id):
+def export_state(instruction, application_id, device_key=None):
     # Revalidate the destination before even sending diagnostics to it.
     target, origin = urlsplit(instruction['url']), urlsplit(data.MUSICBOX_SERVER_URL)
     if (instruction['account_id'] != data.MUSICBOX_ACCOUNT_ID or instruction['skill_id'] != application_id
@@ -105,7 +125,7 @@ def export_state(instruction, application_id):
             pass
     report('started')
     try:
-        return _transfer(instruction, application_id)
+        return _transfer(instruction, application_id, device_key)
     except Exception as exc:
         code = getattr(exc, 'response', {}).get('Error', {}).get('Code', type(exc).__name__)
         report('failed', code)

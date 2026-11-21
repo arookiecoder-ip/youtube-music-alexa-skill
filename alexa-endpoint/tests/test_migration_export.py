@@ -104,3 +104,21 @@ class Export(TestCase):
         self.assertEqual(body['code'],'RuntimeError')
         self.assertNotIn('private detail',str(body))
         self.assertNotIn('token',body)
+
+    def test_wrapper_rejects_scope_before_reporting_or_aws(self):
+        with mock.patch('boto3.client') as aws, mock.patch('urllib3.PoolManager') as http, self.assertRaises(ValueError):
+            state_migration.export_state(dict(self.instruction,account_id='evil'),'s')
+        aws.assert_not_called();http.assert_not_called()
+
+    def test_device_export_needs_only_getitem(self):
+        key='echo-v2:'+'a'*64
+        row={'id':{'S':key},'attributes':{'M':{'saved_playlists':{'L':[]}}}}
+        db=mock.Mock();db.get_item.return_value={'Item':row}
+        http=mock.Mock();http.request.return_value=NS(status=200,data=b'{"ok":true,"count":1,"digest":"hash"}')
+        with mock.patch('boto3.client',return_value=db), mock.patch('urllib3.PoolManager',return_value=http):
+            self.assertEqual(state_migration._transfer(dict(self.instruction,mode='device',expected_devices=2),'s',key)['count'],1)
+        db.scan.assert_not_called();db.put_item.assert_not_called()
+        db.get_item.assert_called_once_with(TableName='table',Key={'id':{'S':key}},ConsistentRead=True)
+        payload=json.loads(http.request.call_args.kwargs['body'])
+        self.assertEqual(payload['device_key'],key)
+        self.assertEqual(payload['expected_devices'],2)

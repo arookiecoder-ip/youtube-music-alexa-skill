@@ -51,7 +51,8 @@ class LaunchRequestHandler(AbstractRequestHandler):
         migration = getattr(envelope, '_musicbox_state_migration', None)
         if migration:
             from state_migration import export_state
-            result = export_state(migration, envelope.context.system.application.application_id)
+            result = export_state(migration, envelope.context.system.application.application_id,
+                                  persistence_key(envelope))
             logger.info('Skill state export completed: rows=%s', result['count'])
             return handler_input.response_builder.set_should_end_session(True).response
         if getattr(envelope, '_musicbox_launch_control', '') == 'cancelled':
