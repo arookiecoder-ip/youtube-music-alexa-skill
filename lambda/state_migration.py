@@ -41,10 +41,13 @@ def _transfer(instruction, application_id, device_key=None):
         # Validate the entire snapshot before the first write. Retry is idempotent;
         # keep both endpoints quiescent until every row has been acknowledged.
         keys = set()
+        from boto3.dynamodb.types import TypeDeserializer
         for row in rows:
             key = row['id']['S']
-            if not isinstance(key, str) or not key or key in keys or set(row['attributes']) != {'M'}:
+            if (not isinstance(key, str) or not 1 <= len(key) <= 2048 or key in keys
+                    or set(row['attributes']) != {'M'} or len(json.dumps(row).encode()) > 400 * 1024):
                 raise ValueError('restore row')
+            TypeDeserializer().deserialize(row['attributes'])
             keys.add(key)
         for row in rows:
             client.put_item(TableName=os.environ['DYNAMODB_PERSISTENCE_TABLE_NAME'], Item=row)

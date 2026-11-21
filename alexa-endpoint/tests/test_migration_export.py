@@ -69,7 +69,8 @@ class Export(TestCase):
 
     def test_restore_validates_all_rows_before_writing(self):
         for rows in ([{'id':{'S':'a'},'attributes':{'M':{}}}, {'broken':{}}],
-                     [{'id':{'S':'a'},'attributes':{'M':{}}}]*2):
+                     [{'id':{'S':'a'},'attributes':{'M':{}}}]*2,
+                     [{'id':{'S':'a'},'attributes':{'M':{}}},{'id':{'S':'b'},'attributes':{'M':{'bad':{'INVALID':'x'}}}}]):
             class Response:
                 status=200
                 def read(self, _):
