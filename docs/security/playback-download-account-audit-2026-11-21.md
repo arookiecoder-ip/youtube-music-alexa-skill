@@ -39,4 +39,15 @@ Safe cleanup in this change removes invalid download destinations, avoids obsole
 - Existing unidentified session duplicates cannot safely be consolidated automatically. Sign out old devices explicitly; future logins acquire stable identities.
 - Real-device network transitions, storage exhaustion, battery restrictions and OEM DownloadManager behavior still require physical-device testing in addition to emulator checks.
 
-Final workflow links, counts and deployment revision are added after verification.
+## Verification evidence
+
+- Isolated backend/web logic: **155/155 regression files passed**, including **2,004 Python cases**, zero failures/errors/skips, plus 32 JavaScript files.
+- YouTube resolver: **23/23 tests passed**.
+- Alexa Lambda/private SDK: **79/79 tests passed**. Persistent endpoint: **31/31 tests passed**.
+- Locked Python dependency audits: server, sign-in browser, Lambda and persistent Alexa endpoint reported **no known vulnerabilities**. npm reported zero advisories for the resolver runtime dependencies.
+- Additional alert/journal and request-secret regressions passed after logging hardening.
+- Public read-only probes before deployment: readiness 200, login 200, unauthenticated audio 401, unauthenticated proxy authorization 401.
+- [Backend change and live CI results](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/pull/70): security boundaries, dependency audit, gitleaks, Trivy, CodeQL, browser containers, full isolated regression runner, SDK and deployment image.
+- [Android change and live CI results](https://github.com/arookiecoder-ip/MusicBox-APP/pull/32): JVM checks, account/device/player UI, signing, optimized release and upgrade/install checks. The initial signed build and JVM checks passed in [Actions](https://github.com/arookiecoder-ip/MusicBox-APP/actions/runs/44918340549); final source and publication use the subsequent main-branch run.
+
+Production deployment is performed by the backend master-branch Actions workflow after merge. Stable APK publication is performed by the main-branch Android Actions workflow only after signing and upgrade checks pass. Workflow links expose final status; local test results are not a substitute for those gates.
