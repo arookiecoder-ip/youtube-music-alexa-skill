@@ -1,4 +1,4 @@
-# Optional persistent endpoint; configure only the skill that is being migrated.
+# Optional persistent ASK compute service; DynamoDB remains inside Lambda.
 services:
   alexa-skill:
     image: ${MUSICBOX_SKILL_IMAGE:?set a reviewed endpoint image}

@@ -1,272 +1,268 @@
-import base64
 import concurrent.futures
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
-import threading
 import time
 from types import SimpleNamespace as NS
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'alexa-endpoint'), str(ROOT / 'lambda')]
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from cryptography.x509.oid import NameOID
-from persistence import SQLiteAdapter
-from service import ActorLocks, create_app
-from verification import Verifier, VerificationError, strict_json
+from relay_store import RelayAdapter, ReplayLedger
+from runtime_relay import signature, state_key
+from service import ActorLocks, create_app, strict_json
+import runtime_relay
+import skill_bootstrap
 
-NOW = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
-SKILL = 'amzn1.ask.skill.test'
-URL = 'https://s3.amazonaws.com/echo.api/echo-api-cert.pem'
+SKILL='amzn1.ask.skill.test'
+SECRET='x'*64
+BINDING='a'*64
 
 
-def event(request_id='r1'):
-    return {'context': {'System': {'application': {'applicationId': SKILL},
-                                   'user': {'userId': 'user'}, 'device': {'deviceId': 'device'}}},
-            'request': {'requestId': request_id, 'type': 'LaunchRequest',
-                        'timestamp': NOW.isoformat().replace('+00:00', 'Z')}}
+def event(request_id='r1', device='device', kind='LaunchRequest'):
+    return {'version':'1.0', 'session':{'new':True,'sessionId':'test-session',
+        'application':{'applicationId':SKILL}, 'user':{'userId':'user'},'attributes':{}},
+        'context':{'System':{'application':{'applicationId':SKILL},'user':{'userId':'user'},
+        'device':{'deviceId':device,'supportedInterfaces':{'AudioPlayer':{}}},
+        'apiAccessToken':'proof', 'apiEndpoint':'https://api.eu.amazonalexa.com'}},
+        'request':{'requestId':request_id,'type':kind,'timestamp':dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00','Z'),'locale':'en-US'}}
 
 
-def envelope(skill=SKILL, binding='binding', device='device'):
-    return NS(context=NS(system=NS(application=NS(application_id=skill),
-                                  user=NS(user_id='user'), device=NS(device_id=device))),
-              _musicbox_binding=binding)
+def envelope(device='device', binding=BINDING):
+    return NS(context=NS(system=NS(application=NS(application_id=SKILL),
+        user=NS(user_id='user'),device=NS(device_id=device))),_musicbox_binding=binding)
 
 
-class Security(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.tmp = tempfile.TemporaryDirectory()
-        cls.ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        cls.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'Test root')])
-        cls.name = name
-        cls.root = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
-                    .public_key(cls.ca_key.public_key()).serial_number(1)
-                    .not_valid_before(NOW - dt.timedelta(days=1)).not_valid_after(NOW + dt.timedelta(days=10))
-                    .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-                    .sign(cls.ca_key, hashes.SHA256()))
-        cls.roots = Path(cls.tmp.name) / 'roots.pem'
-        cls.roots.write_bytes(cls.root.public_bytes(serialization.Encoding.PEM))
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.tmp.cleanup()
-
-    def cert(self, san='echo-api.amazon.com', start=-1, end=1, signer=None, usage=True):
-        return (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, san)]))
-                .issuer_name(self.name).public_key(self.key.public_key()).serial_number(2)
-                .not_valid_before(NOW + dt.timedelta(days=start)).not_valid_after(NOW + dt.timedelta(days=end))
-                .add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
-                .add_extension(x509.SubjectAlternativeName([x509.DNSName(san)]), False)
-                .add_extension(x509.KeyUsage(usage, False, True, False, False, False, False, False, False), True)
-                .sign(signer or self.ca_key, hashes.SHA256()).public_bytes(serialization.Encoding.PEM))
-
-    def verifier(self, cert=None):
-        return Verifier(SKILL, roots=str(self.roots), fetch=lambda _: cert or self.cert(), now=lambda: NOW)
-
-    def signed(self, obj=None, raw=None):
-        raw = raw if raw is not None else json.dumps(obj or event()).encode()
-        signature = self.key.sign(raw, padding.PKCS1v15(), hashes.SHA256())
-        return raw, {'SignatureCertChainUrl': URL, 'Signature-256': base64.b64encode(signature).decode()}
-
-    def test_valid_signature(self):
-        raw, headers = self.signed()
-        self.assertEqual(self.verifier().verify(raw, headers), event())
-
-    def test_certificate_urls(self):
-        for url in ('http://s3.amazonaws.com/echo.api/a', 'https://s3.amazonaws.com.evil/echo.api/a',
-                    'https://evil/echo.api/a', 'https://user@s3.amazonaws.com/echo.api/a',
-                    'https://s3.amazonaws.com:444/echo.api/a', 'https://s3.amazonaws.com/echo.api/../a',
-                    'https://s3.amazonaws.com/echo.api/%2e/a', URL + '?x=1', URL + '#x',
-                    'https://s3.amazonaws.com/echo.api//a', 'https://s3.amazonaws.com/echo.api/./a'):
-            with self.subTest(url=url), self.assertRaises(VerificationError):
-                Verifier.certificate_url(url)
-
-    def test_certificate_failures(self):
-        for cert in (self.cert(san='evil.test'), self.cert(start=-3, end=-1),
-                     self.cert(start=1, end=2), self.cert(usage=False), b'broken',
-                     self.cert(signer=rsa.generate_private_key(public_exponent=65537, key_size=2048))):
-            with self.subTest(), self.assertRaises(VerificationError):
-                self.verifier(cert).verify(*self.signed())
-
-    def test_tamper_missing_bad_signature(self):
-        raw, headers = self.signed()
-        for body, hdr in ((raw + b' ', headers), (raw, {}),
-                          (raw, dict(headers, **{'Signature-256': '!!!'})),
-                          (raw, dict(headers, **{'Signature-256': ''})),
-                          (raw, {'SignatureCertChainUrl': URL, 'Signature': headers['Signature-256']})):
-            with self.subTest(), self.assertRaises(VerificationError):
-                self.verifier().verify(body, hdr)
-
-    def test_envelope_failures(self):
-        for change in ('old', 'future', 'skill', 'session', 'missing', 'empty', 'session_null', 'timestamp'):
-            obj = event()
-            if change in ('old', 'future'):
-                obj['request']['timestamp'] = (NOW + dt.timedelta(seconds=151 if change == 'future' else -151)).isoformat().replace('+00:00', 'Z')
-            elif change == 'skill':
-                obj['context']['System']['application']['applicationId'] = 'evil'
-            elif change == 'session':
-                obj['session'] = {'application': {'applicationId': 'evil'}}
-            elif change == 'session_null':
-                obj['session'] = None
-            elif change == 'missing':
-                del obj['context']['System']['device']
-            elif change == 'empty':
-                obj['request']['requestId'] = ''
-            else:
-                obj['request']['timestamp'] = 'nope'
-            with self.subTest(change=change), self.assertRaises(VerificationError):
-                self.verifier().verify(*self.signed(obj))
-
-    def test_strict_json(self):
-        for raw in (b'{"a":1,"a":2}', b'{"a":NaN}', b'[]', b'null', b'\xff', b'{'):
-            with self.subTest(raw=raw), self.assertRaises(VerificationError):
-                strict_json(raw)
-
-    def test_cache_and_size(self):
-        v = self.verifier()
-        v.verify(*self.signed())
-        v.fetch = lambda _: (_ for _ in ()).throw(AssertionError('cached'))
-        v.verify(*self.signed())
-        with self.assertRaises(VerificationError):
-            v.verify(b'x' * (512 * 1024 + 1), {})
+def payload(e=None):
+    e=e or event()
+    return {'event':e,'account_id':'account','identity':{'binding':BINDING},
+        'params':skill_bootstrap._params(e),'key':state_key(e,BINDING),'attributes':{'M':{}}}
 
 
-class Storage(unittest.TestCase):
+def signed(p, *, secret=SECRET, stamp=None, nonce='b'*32, raw=None):
+    raw=raw if raw is not None else json.dumps(p,separators=(',',':')).encode()
+    stamp=str(int(time.time())) if stamp is None else stamp
+    return raw, {'X-MusicBox-Relay-Time':stamp,'X-MusicBox-Relay-Nonce':nonce,
+                 'X-MusicBox-Relay-Signature':signature(secret,stamp,nonce,raw),'Content-Type':'application/json'}
+
+
+class Runtime(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.path = str(Path(self.tmp.name) / 'state.db')
-        self.db = SQLiteAdapter(self.path, 'account', SKILL)
+        self.config=mock.patch.multiple(runtime_relay.data,MUSICBOX_SERVER_URL='https://music.example',DEFAULT_API_URL='https://music.example',MUSICBOX_ACCOUNT_ID='account',MUSICBOX_RUNTIME_SECRET=SECRET)
+        self.config.start();self.addCleanup(self.config.stop)
+        self.tmp=tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path=str(Path(self.tmp.name)/'requests.db')
+        self.ledger=ReplayLedger(self.path,'account',SKILL)
+        self.adapter=RelayAdapter()
+        self.calls=[]
+        def handler(e,ctx):
+            self.calls.append(e)
+            self.adapter.save_attributes(envelope(e['context']['System']['device']['deviceId']),{'saved_playlists':['kept'],'position':123})
+            return {'version':'1.0','response':{'shouldEndSession':True}}
+        self.app=create_app(self.adapter,handler,self.ledger,secret=SECRET,account_id='account',skill_id=SKILL)
+        self.client=self.app.test_client()
 
-    def tearDown(self):
-        self.tmp.cleanup()
+    def post(self,p=None,**kwargs):
+        raw,headers=signed(p or payload(),**kwargs)
+        return self.client.post('/alexa/skill/relay/',data=raw,headers=headers)
 
-    def test_import_roundtrip_restart_and_scope(self):
-        from boto3.dynamodb.types import TypeSerializer
-        from decimal import Decimal
-        from skill_security import persistence_key
-        env = envelope()
-        attrs = {'user': {'saved_playlists': ['a'], 'offset': Decimal('123.50')}, 'unknown': {'v': True}}
-        items = [{'id': {'S': persistence_key(env)}, 'attributes': TypeSerializer().serialize(attrs)}]
-        self.assertFalse(self.db.ready())
-        digest = self.db.import_snapshot(items, 't1')
-        self.assertEqual(self.db.import_snapshot(items, 't1'), digest)
-        restarted = SQLiteAdapter(self.path, 'account', SKILL)
-        self.assertEqual(restarted.get_attributes(env), attrs)
-        self.assertEqual(restarted.get_attributes(envelope(device='other')), {})
-        self.assertEqual(restarted.get_attributes(envelope(binding='other')), {})
-        self.assertFalse(SQLiteAdapter(self.path, 'other', SKILL).ready())
-        with self.assertRaises(ValueError):
-            restarted.get_attributes(envelope(skill='evil'))
-        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+    def test_authenticated_dispatch_and_response_authentication(self):
+        p=payload();raw,headers=signed(p)
+        r=self.client.post('/alexa/skill/relay/',data=raw,headers=headers)
+        self.assertEqual(r.status_code,200)
+        self.assertTrue(r.json['dirty'])
+        self.assertEqual(r.json['key'],p['key'])
+        self.assertEqual(r.json['attributes']['M']['position'],{'N':'123'})
+        self.assertEqual(r.headers['X-MusicBox-Relay-Signature'],signature(SECRET,headers['X-MusicBox-Relay-Time'],headers['X-MusicBox-Relay-Nonce'],r.data,response=True))
+        self.assertEqual(r.headers['Cache-Control'],'no-store')
+        self.assertFalse(hasattr(self.adapter.local,'state'))
+        self.assertIsNone(skill_bootstrap.take(p['event']['request']['requestId'],skill_bootstrap._api_url(),p['params']))
 
-    def test_no_partial_import_or_overwrite(self):
-        for items in ([{'id': {'S': 'a'}, 'attributes': {'M': {}}}] * 2,
-                      [{'id': {'S': 'a'}, 'attributes': {'M': {}}}, {'broken': {}}]):
-            with self.assertRaises((ValueError, KeyError)):
-                self.db.import_snapshot(items, 't')
-            self.assertFalse(self.db.ready())
-        self.db.import_snapshot([], 't')
-        with self.assertRaises(ValueError):
-            self.db.import_snapshot([], 'different')
+    def test_missing_tampered_expired_or_wrong_secret_never_dispatches(self):
+        raw,headers=signed(payload())
+        tests=[(raw,{}),(raw+b' ',headers),signed(payload(),secret='other'),
+               signed(payload(),stamp=str(int(time.time())-31)),
+               signed(payload(),stamp=str(int(time.time())+31)),
+               signed(payload(),nonce='not-valid')]
+        for body,hdr in tests:
+            with self.subTest():
+                self.assertEqual(self.client.post('/alexa/skill/relay/',data=body,headers=hdr).status_code,403)
+        self.assertEqual(self.calls,[])
 
-    def test_write_read_delete_and_closed_before_import(self):
-        with self.assertRaises(RuntimeError):
-            self.db.get_attributes(envelope())
-        with self.assertRaises(RuntimeError):
-            self.db.save_attributes(envelope(), {})
-        self.db.import_snapshot([], 't')
-        self.db.save_attributes(envelope(), {'x': 1})
-        self.assertEqual(self.db.get_attributes(envelope()), {'x': 1})
-        self.db.delete_attributes(envelope())
-        self.assertEqual(self.db.get_attributes(envelope()), {})
+    def test_skill_account_binding_device_and_session_scope(self):
+        for change in ('account','skill','session','binding','device','key','params'):
+            p=payload()
+            if change=='account':p['account_id']='other'
+            elif change=='skill':p['event']['context']['System']['application']['applicationId']='other'
+            elif change=='session':p['event']['session']['application']['applicationId']='other'
+            elif change=='binding':p['identity']['binding']='b'*64
+            elif change=='device':p['event']['context']['System']['device']['deviceId']='other'
+            elif change=='key':p['key']='echo-v2:'+'b'*64
+            else:p['params']={}
+            with self.subTest(change=change):self.assertIn(self.post(p).status_code,(400,403))
+        self.assertEqual(self.calls,[])
 
-    def test_request_replay_atomic_and_restart(self):
+    def test_malformed_and_oversized_requests_fail_before_dispatch(self):
+        for raw in (b'{}',b'[]',b'null',b'{"a":1,"a":2}',b'{"a":NaN}',b'\xff',b'['*2000):
+            with self.subTest():self.assertEqual(self.post(raw=raw).status_code,400)
+        p=payload();p['attributes']={'M':{'x':{'UNKNOWN':'bad'}}}
+        self.assertEqual(self.post(p).status_code,400)
+        self.assertEqual(self.post(raw=b'x'*(1024*1024+1)).status_code,413)
+        self.assertEqual(self.calls,[])
+
+    def test_event_timestamps_and_shape(self):
+        for change in ('old','future','none','session_null'):
+            p=payload()
+            if change in ('old','future'):
+                p['event']['request']['timestamp']=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(seconds=151 if change=='future' else -151)).isoformat().replace('+00:00','Z')
+            elif change=='none':p['event']['request']['timestamp']=None
+            else:p['event']['session']=None
+            with self.subTest():self.assertEqual(self.post(p).status_code,400)
+        self.assertEqual(self.calls,[])
+
+    def test_duplicate_suppression_survives_restart_and_body_conflict(self):
+        p=payload();self.assertEqual(self.post(p).status_code,200)
+        self.assertFalse(self.post(p).json['dirty']);self.assertEqual(len(self.calls),1)
+        self.ledger=ReplayLedger(self.path,'account',SKILL)
+        self.assertFalse(self.ledger.claim('r1',hashlib.sha256(signed(p)[0]).hexdigest(),time.time()))
+        p['attributes']={'M':{'x':{'S':'changed'}}}
+        self.assertEqual(self.post(p).status_code,400)
+        self.assertEqual(len(self.calls),1)
+
+    def test_storage_account_isolation_and_atomic_claim(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            claims = list(pool.map(lambda _: self.db.claim_request('r', 'hash', 1000), range(32)))
-        self.assertEqual(sum(claims), 1)
-        self.assertFalse(SQLiteAdapter(self.path, 'account', SKILL).claim_request('r', 'hash', 1001))
-        with self.assertRaises(ValueError):
-            self.db.claim_request('r', 'different', 1001)
-        self.assertTrue(self.db.claim_request('r', 'hash', 1601))
+            claimed=list(pool.map(lambda _:self.ledger.claim('same','hash',time.time()),range(32)))
+        self.assertEqual(sum(claimed),1)
+        self.assertTrue(ReplayLedger(self.path,'other',SKILL).claim('same','other-hash',time.time()))
+        self.assertEqual(os.stat(self.path).st_mode & 0o777,0o600)
 
-    def test_service_readiness_migration_errors_replay_and_failure(self):
-        class V:
-            def verify(self, raw, headers):
-                if raw == b'bad':
-                    raise VerificationError()
-                return event(raw.decode())
-        calls = []
-        def handler(e, _):
-            calls.append(e)
-            if e['request']['requestId'] == 'fail':
-                raise RuntimeError('private token must not be logged')
-            return {'version': '1.0', 'response': {}}
-        app = create_app(self.db, handler, V(), migration_token='secret',
-                         migration_expires=time.time()+60, transfer_id='t')
-        c = app.test_client()
-        self.assertEqual(c.get('/health/ready').status_code, 503)
-        self.assertEqual(c.post('/alexa/skill/', data=b'bad').status_code, 400)
-        self.assertEqual(c.post('/alexa/skill/', data=b'r').status_code, 503)
-        payload = {'account_id': 'account', 'skill_id': SKILL, 'transfer_id': 't', 'items': []}
-        self.assertEqual(c.post('/alexa/skill/migration/', json=payload).status_code, 404)
-        self.assertEqual(c.post('/alexa/skill/migration/', json=payload,
-                               headers={'X-MusicBox-Migration': 'secret'}).status_code, 200)
-        self.assertEqual(c.get('/health/ready').status_code, 200)
-        self.assertEqual(c.post('/alexa/skill/', data=b'r').status_code, 200)
-        self.assertEqual(c.post('/alexa/skill/', data=b'r').status_code, 200)
-        self.assertEqual(len(calls), 1)
-        with self.assertLogs('service', level='ERROR') as logs:
-            self.assertEqual(c.post('/alexa/skill/', data=b'fail').status_code, 503)
-        self.assertNotIn('private token', str(logs.output))
-        self.assertEqual(c.get('/alexa/skill/').status_code, 405)
+    def test_adapter_binding_scope_and_cleanup_on_exception(self):
+        with self.assertRaises(RuntimeError):
+            with self.adapter.request(state_key(event(),BINDING),{'M':{}}):
+                with self.assertRaises(ValueError):self.adapter.get_attributes(envelope(device='other'))
+                self.assertEqual(self.adapter.get_attributes(envelope()),{})
+                raise RuntimeError('test')
+        self.assertFalse(hasattr(self.adapter.local,'state'))
+        with self.assertRaises(ValueError):self.adapter.get_attributes(envelope())
 
-    def test_fleet_import_remains_unready_until_all_devices_and_preserves_playlists(self):
-        first, second = 'echo-v2:'+'a'*64, 'echo-v2:'+'b'*64
-        row = {'id':{'S':first}, 'attributes':{'M':{'saved_playlists':{'L':[{'S':'playlist'}]}}}}
-        digest = self.db.import_device_snapshot([row], 't', first, 2)
-        self.assertFalse(self.db.ready())
-        self.assertEqual(self.db.import_device_snapshot([row], 't', first, 2), digest)
-        self.assertFalse(self.db.ready())
-        with self.assertRaises(ValueError):
-            self.db.import_device_snapshot([row], 't', second, 2)
-        self.assertFalse(self.db.ready())
-        self.db.import_device_snapshot([], 't', second, 2)
-        self.assertTrue(self.db.ready())
-        self.assertEqual(self.db.export_snapshot(), [row])
-        self.db.import_device_snapshot([row], 't', first, 2)
-        with self.assertRaises(ValueError):
-            self.db.import_device_snapshot([], 'other', second, 2)
+    def test_adapter_keeps_unknown_fields_decimals_and_saved_playlists(self):
+        from decimal import Decimal
+        value={'future':{'n':Decimal('12.34')},'saved_playlists':['a','b']}
+        with self.adapter.request(state_key(event(),BINDING),{'M':{}}) as state:
+            self.adapter.save_attributes(envelope(),value)
+            self.assertEqual(self.adapter.get_attributes(envelope()),value)
+            self.assertTrue(state['dirty'])
+            self.adapter.delete_attributes(envelope());self.assertEqual(state['attributes'],{'M':{}})
 
-    def test_canary_never_initializes_an_unmigrated_device(self):
-        from skill_security import persistence_key, SkillAuthorizationError
-        env = envelope()
-        key = persistence_key(env)
-        self.db.import_device_snapshot([], 't', key, 1)
-        self.db.require_imported = True
-        self.assertEqual(self.db.get_attributes(env), {})
-        with self.assertRaises(SkillAuthorizationError):
-            self.db.get_attributes(envelope(device='unmigrated'))
-        with self.assertRaises(SkillAuthorizationError):
-            self.db.save_attributes(envelope(device='unmigrated'), {})
+    def test_two_echo_requests_keep_attributes_in_separate_threads(self):
+        import threading
+        barrier=threading.Barrier(2)
+        def run(device):
+            e=event(device=device)
+            with self.adapter.request(state_key(e,BINDING),{'M':{}}) as state:
+                self.adapter.save_attributes(envelope(device=device),{'device':device})
+                barrier.wait(timeout=2)
+                value=self.adapter.get_attributes(envelope(device=device))
+                return value,state['key']
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            a=pool.submit(run,'first');b=pool.submit(run,'second')
+            first,second=a.result(),b.result()
+        self.assertEqual(first[0],{'device':'first'})
+        self.assertEqual(second[0],{'device':'second'})
+        self.assertNotEqual(first[1],second[1])
 
-    def test_actor_lock_capacity_timeout_and_cleanup(self):
-        locks = ActorLocks(capacity=1)
-        self.assertEqual(locks.acquire('a'), 'a')
+    def test_actor_limits_timeout_and_cleanup(self):
+        locks=ActorLocks(capacity=1)
+        self.assertEqual(locks.acquire('a'),'a')
         self.assertIsNone(locks.acquire('b'))
-        self.assertIsNone(locks.acquire('a', timeout=0))
-        locks.release('a')
-        self.assertEqual(locks.acquire('b'), 'b')
-        locks.release('b')
-        self.assertEqual(locks.entries, {})
+        self.assertIsNone(locks.acquire('a',timeout=0))
+        locks.release('a');self.assertEqual(locks.acquire('b'),'b');locks.release('b')
+        self.assertEqual(locks.entries,{})
+
+    def test_handler_failure_has_no_sensitive_log_or_response(self):
+        def fail(e,c):raise RuntimeError('private token')
+        app=create_app(self.adapter,fail,self.ledger,secret=SECRET,account_id='account',skill_id=SKILL)
+        raw,headers=signed(payload())
+        with self.assertLogs('service',level='ERROR') as logs:
+            r=app.test_client().post('/alexa/skill/relay/',data=raw,headers=headers)
+        self.assertEqual(r.status_code,503)
+        self.assertNotIn('private token',str(logs.output));self.assertEqual(r.data,b'')
+        self.assertFalse(hasattr(self.adapter.local,'state'))
+
+    def test_no_unauthenticated_direct_skill_or_migration_route(self):
+        self.assertEqual(self.client.post('/alexa/skill/',json={}).status_code,404)
+        self.assertEqual(self.client.post('/alexa/skill/migration/',json={}).status_code,404)
+        self.assertEqual(self.client.get('/health/ready').status_code,200)
 
 
-if __name__ == '__main__':
-    unittest.main()
+class LambdaRelay(unittest.TestCase):
+    def setUp(self):
+        self.config=mock.patch.multiple(runtime_relay.data,MUSICBOX_RUNTIME_SECRET=SECRET,
+            MUSICBOX_SERVER_URL='https://music.example',DEFAULT_API_URL='https://music.example',MUSICBOX_ACCOUNT_ID='account')
+        self.config.start();self.addCleanup(self.config.stop)
+        self.env=mock.patch.dict(os.environ,DYNAMODB_PERSISTENCE_TABLE_NAME='own-table',DYNAMODB_PERSISTENCE_REGION='eu-west-1')
+        self.env.start();self.addCleanup(self.env.stop)
+
+    def invoke(self, *, result=None, row=None, status=200, tamper=False, ddb_error=None):
+        e=event();self.db=mock.Mock();self.db.get_item.return_value={'Item':row} if row else {}
+        self.db.put_item.side_effect=ddb_error
+        key=state_key(e,BINDING)
+        result=result or {'response':{'version':'1.0','response':{}},'key':key,'dirty':True,'attributes':{'M':{'saved':{'S':'yes'}}}}
+        http=mock.Mock()
+        def send(method,url,**kwargs):
+            self.sent=json.loads(kwargs['body'])
+            raw=json.dumps(result).encode();h=kwargs['headers']
+            sig=signature(SECRET,h['X-MusicBox-Relay-Time'],h['X-MusicBox-Relay-Nonce'],raw,response=True)
+            return NS(status=status,data=raw,headers={'X-MusicBox-Relay-Signature':'wrong' if tamper else sig})
+        http.request.side_effect=send
+        response=NS(status=200,data=json.dumps({'binding':BINDING,'control':{'kind':'resume'}}).encode())
+        with mock.patch.object(runtime_relay,'_ddb',return_value=self.db), mock.patch.object(skill_bootstrap,'_fetch',return_value=response), mock.patch.object(skill_bootstrap,'http_client',return_value=http):
+            return runtime_relay.invoke(e,NS(get_remaining_time_in_millis=lambda:8000))
+
+    def test_authorize_read_dispatch_then_conditional_write(self):
+        self.invoke()
+        self.db.get_item.assert_called_once()
+        self.assertTrue(self.db.get_item.call_args.kwargs['ConsistentRead'])
+        kwargs=self.db.put_item.call_args.kwargs
+        self.assertEqual(kwargs['TableName'],'own-table')
+        self.assertEqual(kwargs['ConditionExpression'],'attribute_not_exists(#r)')
+        self.assertEqual(self.sent['identity']['control']['kind'],'resume')
+
+    def test_existing_revision_and_unknown_item_fields_preserved(self):
+        self.invoke(row={'musicbox_runtime_revision':{'S':'old'},'future':{'S':'kept'},'attributes':{'M':{}}})
+        kwargs=self.db.put_item.call_args.kwargs
+        self.assertEqual(kwargs['ExpressionAttributeValues'],{':previous':{'S':'old'}})
+        self.assertEqual(kwargs['Item']['future'],{'S':'kept'})
+
+    def test_denial_does_not_read_or_dispatch(self):
+        with mock.patch.object(skill_bootstrap,'_fetch',return_value=NS(status=403,data=b'{}')), mock.patch.object(runtime_relay,'_ddb') as db, self.assertRaises(runtime_relay.RelayAuthorizationDenied):
+            runtime_relay.invoke(event(),None)
+        db.assert_not_called()
+
+    def test_failed_or_tampered_response_never_writes(self):
+        for options in ({'status':503},{'tamper':True},
+                        {'result':{'dirty':True,'key':'other','attributes':{'M':{}},'response':{}}}):
+            with self.subTest(),self.assertRaises((RuntimeError,ValueError)):
+                self.invoke(**options)
+            self.db.put_item.assert_not_called()
+
+    def test_conditional_write_failure_does_not_return_play_directive(self):
+        with self.assertRaises(RuntimeError):self.invoke(ddb_error=RuntimeError('conditional conflict'))
+
+    def test_read_only_or_duplicate_reply_never_writes(self):
+        self.invoke(result={'dirty':False,'response':{'version':'1.0','response':{}}})
+        self.db.put_item.assert_not_called()
+
+    def test_no_aws_access_for_invalid_binding(self):
+        with mock.patch.object(skill_bootstrap,'_fetch',return_value=NS(status=200,data=b'{"binding":"invalid"}')), mock.patch.object(runtime_relay,'_ddb') as db, self.assertRaises(ValueError):
+            runtime_relay.invoke(event(),None)
+        db.assert_not_called()
+
+
+if __name__=='__main__':unittest.main()

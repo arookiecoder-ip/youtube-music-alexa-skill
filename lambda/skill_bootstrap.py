@@ -137,6 +137,19 @@ def clear():
         del _pending.item
 
 
+def install_response(event, response):
+    """Install an already verified response for this exact envelope only.
+
+    The persistent service calls this only after authenticating the private
+    Lambda relay. It is never populated from an unsigned public request.
+    """
+    from concurrent.futures import Future
+    clear()
+    future = Future()
+    future.set_result(response)
+    _pending.item = (event['request']['requestId'], _api_url(), _params(event), future)
+
+
 def runtime_ready(milliseconds):
     global _runtime_load_ms
     _runtime_load_ms = milliseconds

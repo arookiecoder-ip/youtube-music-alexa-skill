@@ -8,7 +8,7 @@ COPY lambda/*.py ./
 COPY lambda/mediaUtils ./mediaUtils
 COPY lambda/models ./models
 COPY alexa-endpoint/*.py ./
-ENV MUSICBOX_PERSISTENCE_MODE=sqlite MUSICBOX_SKILL_DB=/state/skill.db PYTHONUNBUFFERED=1
+ENV MUSICBOX_PERSISTENCE_MODE=relay MUSICBOX_SKILL_DB=/state/requests.db PYTHONUNBUFFERED=1
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=30s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"

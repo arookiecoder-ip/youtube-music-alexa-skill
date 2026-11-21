@@ -1,95 +1,95 @@
-# Persistent Alexa HTTPS endpoint
+# Persistent Alexa SDK runtime
 
 The optional `alexa-endpoint` service loads the existing Python ASK handlers once
-at startup. It removes managed Lambda initialization from subsequent requests;
-Amazon command routing, authorization, stream resolution and Echo buffering still
-contribute latency. No synthetic playback or periodic skill invocation is used.
+at startup. The Alexa skill retains its original Lambda endpoint and DynamoDB
+state. Both Echos keep their existing settings, saved playlists and playback
+records, including devices currently offline. No account or state migration,
+new AWS resource, periodic invocation or synthetic playback is required.
 
-Only explicitly configured skills move. Other users' hosted skill copies keep
-using DynamoDB. Never share this service's account token across accounts.
+Normal successful Lambda requests do not import the ASK SDK. A small relay:
 
-## Request and state boundaries
+1. Authorizes the current Alexa envelope through the existing backend identity
+   endpoint, including fresh Amazon profile proof and current account policy.
+2. Consistently reads only that request's existing skill/user/device/binding key
+   using the Lambda execution role. AWS credentials stay inside Lambda.
+3. Sends the envelope, this request's authorization response and attributes to
+   the persistent SDK service, authenticated with a separate private HMAC secret.
+4. Verifies the signed response and conditionally saves changed attributes to
+   the same DynamoDB item before returning any AudioPlayer directive to Alexa.
 
-The HTTPS endpoint verifies `Signature-256` over the exact request body, validates
-the signing certificate chain against trusted roots, checks its Amazon SAN and
-validity, rejects unsafe certificate URLs and redirects, checks the 150-second
-request timestamp window, and pins both context and session application IDs.
-Every dispatched playback request still undergoes the existing account/token/
-Amazon profile authorization. No cached authorization result crosses requests.
+The relay removes ASK SDK initialization from Lambda's normal cold path. Lambda
+itself can still initialize after idle, and Amazon routing, stream resolution,
+network calls and Echo buffering still take time. Measure first audio bytes and
+real device callbacks; do not equate either with acoustic output.
 
-Each process has one skill ID and account ID. SQLite rows additionally retain the
-existing skill/user/device/binding-derived persistence key. The state volume is
-private, writable by UID10001, and independent of the main application's queue
-DB. Missing migration metadata makes readiness fail, including after volume loss.
-Never create an empty readiness marker to recover an existing skill.
+## Boundaries and failure handling
 
-Requests from the same Amazon user/device are serialized with a bounded wait;
-different actors can proceed concurrently. A durable request-ID/body-hash ledger
-suppresses duplicate dispatch across restarts for ten minutes. Reusing an ID with
-a different body fails. A crash after claiming a request may suppress that request;
-this is at-most-once dispatch, not an exactly-once delivery guarantee. Existing
-control watchdogs and a new user action recover with a new request ID.
+The worker pins the account and skill IDs. It checks HMAC-SHA256 over the exact
+body, request time and nonce, plus the event timestamp, identity key, session
+application and authorization parameters. Responses have a separate signed
+message domain. Requests are bounded to1MiB and persisted attributes to400KiB.
+The relay follows no redirects and contacts only the configured HTTPS backend
+origin. Invalid or missing secrets fail closed.
 
-## Deployment and migration
+Only the authenticated Lambda relay can supply an authorization response. It is
+installed into the SDK's request-local prefetch once for that exact envelope and
+is always cleared, including on exceptions. This prevents a second authorization
+call from consuming or cancelling the same armed control. Backend calls after
+that still run existing authorization, binding and playback revision checks.
 
-1. Run existing server/Lambda regressions and
-   `python -m unittest discover -s alexa-endpoint/tests -v` using the endpoint lock.
-   Build from the repository root with `docker build -f alexa-endpoint/Dockerfile`.
-2. Provision a private state directory owned by UID10001. Put the existing skill's
-   four `MUSICBOX_*` account settings in a private mode0600 env file. Add
-   `MUSICBOX_SKILL_ID`, `MUSICBOX_MIGRATION_ID`, a random 48-byte URL-safe
-   `MUSICBOX_MIGRATION_TOKEN`, and `MUSICBOX_MIGRATION_EXPIRES` (Unix time,
-   less than one hour). Start the optional Compose service and add the documented
-   Caddy route. Do not expose its port directly. Readiness must initially be503.
-3. Back up the actual development manifest and each regional endpoint privately.
-   Save the selected track, full queue, output token, position and paused/playing
-   state. Quiesce controls and confirm the Echo is stopped before scanning state.
-4. Deploy `lambda/state_migration.py` and the reviewed runtime interceptor changes
-   to the existing hosted skill, retaining its private `.env`. Deploy the backend
-   instruction support. No AWS credentials leave the existing Lambda.
-5. Operator creates `/data/alexa-skill-export.json` in the backend, mode0600, with
-   `account_id`, `skill_id`, `transfer_id`, `token`, `expires`, and `url` pointing
-   to the same backend origin's `/alexa/skill/migration/`. For Alexa-hosted roles,
-   also set `mode: device` and `expected_devices` to the full number of Echos
-   being retained. Hosted roles deny Scan; device mode consistently reads only
-   the current authorized skill/user/device/binding key with GetItem. Invoke
-   each retained Echo once. Offline devices must come online before cutover;
-   do not lower the count unless the operator confirms a device is retired.
-   Only an authenticated,
-   matching LaunchRequest receives the instruction. Invoke one silent launch.
-   Remove the instruction immediately after the export completes.
-6. The old Lambda consistently scans its own table and posts one bounded complete
-   snapshot. Partial scans, excess size/time, duplicates/conflicts or invalid rows
-   cannot activate a partial import. Verify row count and snapshot digest. Imported
-   unknown/legacy rows remain archived; current device binding keys are unchanged.
-   A scan is not a transactional snapshot across concurrent writers: quiescence
-   in step3 is mandatory. Keep the source table intact.
-7. Disable migration by removing the migration env values and recreate the worker
-   with the same state directory. Verify state survives the restart, unsigned public
-   requests fail and readiness passes. Switch all existing development regional
-   endpoints to `https://YOUR_HOST/alexa/skill/`, trusted certificate. Test a real
-   Amazon-signed request, resume, seek, pause, continuity, rapid controls, error
-   handling and state restoration. Roll back immediately if verification fails.
-8. Restore the user's exact queue/selection/cursor/output and original playing
-   state, revoke the temporary verification session, and retain private backups.
-   Live-stage changes, when applicable, require Amazon's publishing process.
+Worker persistence is request-local. No music queue or saved playlist is moved
+into its SQLite file; SQLite stores a bounded replay ledger only. Per-device
+locks serialize SDK work; different devices can proceed concurrently. Request
+IDs and body hashes suppress duplicate dispatch for ten minutes across worker
+restarts. Conflicting request-ID reuse fails. This provides at-most-once dispatch,
+not exactly-once delivery: a crash can suppress one request, recovered by the
+existing app watchdog or a new user command with a new Alexa request ID.
+
+DynamoDB conditional writes fence concurrent whole-item saves. A stale write or
+failed durable save never returns its playback directive. Unknown item fields
+and DynamoDB numeric types are retained. Authorization denials use the existing
+SDK error handler before any state read. After an uncertain remote dispatch,
+the Lambda does not dispatch the same command again through a local fallback.
+No raw body, profile proof, state URL, HMAC secret or AWS credential is logged.
+
+## Deploy
+
+1. Run existing backend and Lambda suites plus
+   `python -m unittest discover -s alexa-endpoint/tests -v`. Build from the repo
+   root with `docker build -f alexa-endpoint/Dockerfile` using the hashed lock.
+2. Provision a private state directory owned by UID10001. Configure the worker's
+   private mode0600 env file with the skill's existing four `MUSICBOX_*` account
+   settings, `MUSICBOX_SKILL_ID`, and a new random48-byte URL-safe
+   `MUSICBOX_RUNTIME_SECRET`. Never commit it to the public repository. Start the
+   service using `docker-compose.alexa-endpoint.yml`; expose no public host port.
+3. Add this route before the generic backend handle in the existing Caddy site:
+
+   ```caddyfile
+   handle /alexa/skill/relay/ {
+       header Cache-Control "no-store"
+       reverse_proxy alexa-skill:8000
+   }
+   ```
+
+4. Validate/reload Caddy, verify worker readiness and confirm unsigned requests
+   receive403. Deploy the reviewed Lambda runtime files including
+   `runtime_relay.py`; add the same private `MUSICBOX_RUNTIME_SECRET` to that
+   hosted skill's `.env`. Other skill copies without a secret retain normal SDK
+   execution. Keep the Alexa manifest and all regional Lambda endpoints intact.
+5. Test actual resume/seek/pause callbacks, rapid controls, paused seeking,
+   continuity, worker restart, error handling, original state restoration and
+   an idle interval. Confirm worker timing logs show dispatch and the successful
+   Lambda path leaves `lambda_function._runtime` unset. Never report idle latency
+   as fixed solely from unit tests or a warm request.
 
 ## Rollback
 
-Keep the original hosted Lambda and manifest. Before any new persistent-service
-state is written, restore the manifest directly. After new state is written,
-quiesce the Echo and controls first; otherwise a direct manifest rollback loses
-new saved playlist/offset changes. Enable a fresh short-lived migration token on
-the worker, configure the same scoped operator instruction with `action: restore`,
-restore the old Lambda manifest, and launch once while controls remain quiescent.
-The hosted migration handler fetches the authenticated HTTPS snapshot, validates
-all rows before writing, then upserts only its own configured DynamoDB table.
-An interrupted restore is retried idempotently; do not resume playback until all
-rows are acknowledged. It does not delete archived DynamoDB rows. Remove the
-instruction and disable migration again. Restore the original playback state and
-verify it with a fresh durable read. Never log the instruction, state payload,
-account token, signature, certificate credentials or federated AWS log links.
+Remove `MUSICBOX_RUNTIME_SECRET` from the hosted skill's private `.env` and deploy
+the reviewed default SDK code (or the previous hosted commit). The manifest and
+DynamoDB table have not moved, so both devices retain their latest saved state.
+Keep the worker until that deployment succeeds, then remove its route/container
+if desired. Rotate both copies of the secret together for a new rollout.
 
-The migration interface returns404 unless explicitly enabled with an unexpired
-secret. It is not a general public state management API. Size bounds deliberately
-fail closed; large tables require a separately reviewed batched migration.
+The public runtime route accepts the private Lambda relay protocol. Amazon's
+existing skill trigger/resource policy authenticates the original invocation;
+the worker additionally pins the configured skill and account IDs.

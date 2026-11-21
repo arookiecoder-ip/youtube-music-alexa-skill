@@ -48,10 +48,3 @@
         reverse_proxy ytmusic:5000
     }
 }
-
-# Optional persistent Alexa endpoint (enable with docker-compose.alexa-endpoint.yml):
-# Add this handle before the generic reverse_proxy inside your site's route:
-# handle /alexa/skill/* {
-#     header Cache-Control "no-store"
-#     reverse_proxy alexa-skill:8000
-# }
