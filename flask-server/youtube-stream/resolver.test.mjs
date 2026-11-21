@@ -140,3 +140,30 @@ test('the end-to-end resolver deadline bounds a hung provider operation', async 
   const { resolve, request } = fixture({ deadlineMs: 5, createClient: () => new Promise(() => {}) });
   await assert.rejects(resolve(request), /resolve_timeout/);
 });
+
+test('original Hindi wins over an English default AI dub and explicit language stays separate',async()=>{
+ const original={itag:140,has_audio:true,content_length:120,is_original:true,audio_track:{id:'hi.4',display_name:'Hindi'},decipher:async()=> 'https://rr1.googlevideo.com/original'};
+ const english={...original,is_original:false,is_auto_dubbed:true,audio_track:{id:'en.4',display_name:'English',audio_is_default:true},decipher:async()=> 'https://rr1.googlevideo.com/english'};
+ const resolve=createResolver({pot:async()=>'',createClient:async()=>({session:{},getBasicInfo:async()=>({streaming_data:{adaptive_formats:[english,original]}})})});
+ const hi=await resolve({video_id:video});
+ const en=await resolve({video_id:video,audio_track:'en.4'});
+ assert.equal(hi.audio_track,'hi.4');assert.equal(en.audio_track,'en.4');
+ assert.equal(hi.audio_tracks.length,2);assert.equal(en.audio_tracks[0].auto_dubbed,true);
+ assert.notEqual(hi.url,en.url);
+ assert.equal((await resolve({video_id:video})).audio_track,'hi.4');
+ await assert.rejects(resolve({video_id:video,audio_track:'fr.4'}),/audio_track_unavailable/);
+ await assert.rejects(resolve({video_id:video,audio_track:'../invalid'}),/invalid_audio_track/);
+});
+test('a timed-out handshake is retryable without restarting the worker',async()=>{
+ let sessions=0;
+ const resolve=createResolver({deadlineMs:10,createClient:()=> ++sessions===1 ? new Promise(()=>{}) : {session:{}}});
+ await assert.rejects(resolve({action:'init'}),/resolve_timeout/);
+ assert.deepEqual(await resolve({action:'init'}),{ready:true});
+});
+test('hung provider calls release all slots after their deadlines',async()=>{
+ let hung=true;
+ const {resolve,request}=fixture({deadlineMs:20,createClient:async()=>({session:{},getBasicInfo:()=>hung?new Promise(()=>{}):Promise.reject(new Error('reachable'))})});
+ await Promise.all(Array.from({length:8},(_,i)=>assert.rejects(resolve({...request,video_id:String(i).padStart(11,'0')}),/resolve_timeout/)));
+ hung=false;
+ await assert.rejects(resolve(request),/reachable/);
+});

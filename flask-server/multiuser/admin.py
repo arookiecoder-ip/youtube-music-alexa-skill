@@ -5,6 +5,8 @@ remote and device APIs are not modified by this module.
 """
 from __future__ import annotations
 
+from auth_sessions import create_browser_session
+
 from auth_sessions import replace_identity, password_change_allowed, complete_login
 
 import csv
@@ -1667,7 +1669,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 # step is not a code oracle with a five-minute timer.
                 flash("That sign-in needs your password again.", "error")
                 return door(next_target, status=401)
-            raw_sid = mu.accounts.create_session(user, ip, _user_agent())
+            raw_sid = create_browser_session(mu.accounts, user, ip, _user_agent())
             complete_login(mu, user, ip)
             replace_identity()
             session["mu_sid"] = raw_sid
@@ -1723,7 +1725,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             mu.accounts.audit(user, "admin_login_2fa", user["id"], {"step": "issued"}, ip, _user_agent())
             return door(next_target, step="code", pending=token)
 
-        raw_sid = mu.accounts.create_session(user, ip, _user_agent())
+        raw_sid = create_browser_session(mu.accounts, user, ip, _user_agent())
         complete_login(mu, user, ip)
         replace_identity()
         session["mu_sid"] = raw_sid
@@ -1956,7 +1958,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             previous_session, _ = mu.accounts.validate_session(previous)
             if previous_session:
                 mu.accounts.revoke_session(previous_session["sid_hash"])
-        raw_sid = mu.accounts.create_session(user, _client_ip(), _user_agent())
+        raw_sid = create_browser_session(mu.accounts, user, _client_ip(), _user_agent())
         replace_identity()
         session["mu_sid"] = raw_sid
         session["mu_user_id"] = user["id"]

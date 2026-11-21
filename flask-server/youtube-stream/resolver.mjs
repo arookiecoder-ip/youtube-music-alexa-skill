@@ -42,6 +42,27 @@ export function cookiesFromNetscape(text, now = Date.now() / 1000) {
   }).join('; ');
 }
 
+// Keep the encoding stable while selecting the original rather than a localized dub.
+export function audioFormats(info) {
+  return (info.streaming_data?.adaptive_formats || []).filter(f =>
+    f.itag === 140 && f.has_audio && !f.has_video && !f.drm_families?.length && f.content_length);
+}
+export function selectAudio(info, track = '') {
+  const formats = audioFormats(info);
+  if (!formats.length) {
+    if (track) throw new Error('audio_track_unavailable');
+    return info.chooseFormat({ itag: 140, type: 'audio', format: 'mp4' });
+  }
+  if (track) {
+    const match = formats.find(f => f.audio_track?.id === track);
+    if (!match) throw new Error('audio_track_unavailable');
+    return match;
+  }
+  return formats.find(f => f.is_original && !f.is_drc) ||
+    formats.find(f => !f.is_dubbed && !f.is_auto_dubbed && !f.is_descriptive && !f.is_secondary && !f.is_drc) ||
+    formats.find(f => f.audio_track?.audio_is_default) || formats[0];
+}
+
 export function createResolver({ createClient = options => Innertube.create(options),
   readFile = path => fs.readFileSync(path, 'utf8'),
   stat = path => fs.statSync(path), now = () => Date.now(), capacity = 128,
@@ -72,7 +93,9 @@ export function createResolver({ createClient = options => Innertube.create(opti
     if (generation !== credential || initializing !== session) return resolve(message);
     if (message.action === 'init') return { ready: true };
     const video = message.video_id;
-    const key = credential + ':' + video;
+    const track = message.audio_track || '';
+    if (typeof track !== 'string' || track.length > 80 || /[^A-Za-z0-9_.-]/.test(track)) throw new Error('invalid_audio_track');
+    const key = credential + ':' + video + ':' + track;
     if (message.refresh) cache.delete(key);
     const hit = cache.get(key);
     if (hit && hit.expires_at > now()) return hit;
@@ -83,14 +106,21 @@ export function createResolver({ createClient = options => Innertube.create(opti
     if (active >= 8) throw new Error('busy');
     active++;
     const currentCache = cache, currentPending = pending;
-    const task = (async () => {
+    const signal = scope.getStore();
+    let aborted;
+    const interrupted = new Promise((_, reject) => {
+      aborted = () => reject(new Error('resolve_timeout'));
+      signal?.addEventListener('abort', aborted, { once: true });
+      if (signal?.aborted) aborted();
+    });
+    const work = (async () => {
       const info = await client.getBasicInfo(video, { client: 'YTMUSIC' });
       const status = info.playability_status?.status;
       if (status === 'LOGIN_REQUIRED') throw new Error('authentication_required');
       if (status === 'UNPLAYABLE' || status === 'ERROR') throw new Error('track_unavailable');
       // Pin AAC itag 140 across requests/restarts: byte ranges cannot resume
       // against a different encoding selected by a later "best" decision.
-      const format = info.chooseFormat({ itag: 140, type: 'audio', format: 'mp4' });
+      const format = selectAudio(info, track);
       if (format.itag !== 140 || format.has_video || !format.has_audio ||
           format.drm_families?.length || !format.content_length)
         throw new Error('unsupported_format');
@@ -126,13 +156,19 @@ export function createResolver({ createClient = options => Innertube.create(opti
         thumbnail: Array.isArray(thumbs) ? String(thumbs.at(-1)?.url || '') : '',
         duration_ms: Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : 0,
         is_live: basic.is_live === true };
-      const result = { url: signed, itag: 140, length: format.content_length,
+      const audio_tracks = [...new Map(audioFormats(info).filter(f => f.audio_track?.id).map(f => [f.audio_track.id, {
+        id: f.audio_track.id, label: f.audio_track.display_name || f.language || f.audio_track.id,
+        original: !!f.is_original, auto_dubbed: !!f.is_auto_dubbed
+      }])).values()];
+      const result = { url: signed, itag: 140, audio_track: format.audio_track?.id || '', audio_tracks, length: format.content_length,
         modified: format.last_modified_ms, mime: 'audio/mp4', expires_at, metadata };
       // A credential rotation while this awaited must not pollute the new cache.
+      if (signal?.aborted) throw new Error('resolve_timeout');
       currentCache.set(key, result);
       while (currentCache.size > capacity) currentCache.delete(currentCache.keys().next().value);
       return result;
     })();
+    const task = Promise.race([work, interrupted]);
     currentPending.set(key, task);
     try { return await task; }
     catch (error) {
@@ -148,13 +184,17 @@ export function createResolver({ createClient = options => Innertube.create(opti
       }
       throw error;
     }
-    finally { currentPending.delete(key); active--; }
+    finally { signal?.removeEventListener('abort', aborted); currentPending.delete(key); active--; }
   };
   return message => {
     const controller = new AbortController();
     let timer;
     const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => { controller.abort(); reject(new Error('resolve_timeout')); }, deadlineMs);
+      timer = setTimeout(() => { controller.abort();
+        // Initialization may hang before a task occupies a slot. Discard the
+        // poisoned handshake so the next song can establish a fresh session.
+        if (!active) reset();
+        reject(new Error('resolve_timeout')); }, deadlineMs);
     });
     return scope.run(controller.signal, () => Promise.race([resolve(message), deadline]))
       .finally(() => clearTimeout(timer));

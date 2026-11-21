@@ -398,3 +398,32 @@ class SharedResolver(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+class LanguageStreaming(unittest.TestCase):
+    def test_selected_language_never_uses_original_cached_bytes_and_has_distinct_etag(self):
+        opener = Mock()
+        stream = YouTubeStream(lambda:'', opener=opener)
+        self.addCleanup(stream.close)
+        stream.current.activate(VID)
+        stream.resolve = Mock(return_value={**MEDIA, 'audio_track':'hi.4'})
+        opener.open.return_value=Upstream()
+        original=stream.open(VID)
+        original_tag=original.headers['ETag']
+        original.remember(original.first)
+        original.close()
+        stream.resolve.return_value={**MEDIA, 'audio_track':'en.4'}
+        opener.open.return_value=Upstream(b'abcdefghijkl')
+        english=stream.open(VID,audio_track='en.4')
+        self.assertEqual(english.first,b'abcdefghijkl')
+        self.assertNotEqual(english.headers['ETag'],original_tag)
+        stream.resolve.assert_called_with(VID,refresh=False,audio_track='en.4')
+        english.close()
+
+    def test_invalid_track_cannot_consume_a_stream_slot(self):
+        stream=YouTubeStream(lambda:'', capacity=1)
+        self.addCleanup(stream.close)
+        for track in ('../../secret','a'*81,'x&url=evil'):
+            with self.assertRaises(StreamError) as failure: stream.open(VID,audio_track=track)
+            self.assertEqual(failure.exception.status,400)
+        self.assertTrue(stream.slots.acquire(False))
+        stream.slots.release()

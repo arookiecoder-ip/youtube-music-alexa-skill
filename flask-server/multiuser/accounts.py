@@ -1594,7 +1594,7 @@ class AccountService:
         self.db.execute("UPDATE users SET security_version = security_version + 1, "
                         "totp_pending_enc = '', totp_pending_at = 0 WHERE id = ?", (user_id,))
 
-    def create_session(self, user: dict, ip: str = "", user_agent: str = "") -> str:
+    def create_session(self, user: dict, ip: str = "", user_agent: str = "", *, device_id: str = "", previous_sid: str = "") -> str:
         raw = new_token(32)
         now = _now()
         expires = now + self.config.session_hours * 3600
@@ -1603,11 +1603,17 @@ class AccountService:
             current = conn.execute("SELECT status, security_version FROM users WHERE id = ?", (user["id"],)).fetchone()
             if not current or current["status"] != "active" or current["security_version"] != user.get("security_version", current["security_version"]):
                 raise AccountError("Sign-in changed. Start again.")
+            # Rotation is atomic with insertion; never merge unrelated clients by UA/IP.
+            if device_id or previous_sid:
+                conn.execute("UPDATE user_sessions SET revoked_at=? WHERE user_id=? AND revoked_at=0 "
+                             "AND ((device_hash<>'' AND device_hash=?) OR sid_hash=?)",
+                             (now, user["id"], sha256_hex(device_id) if device_id else '',
+                              sha256_hex(previous_sid) if previous_sid else ''))
             conn.execute(
                 "INSERT INTO user_sessions "
-                "(sid_hash, user_id, created_at, last_seen_at, expires_at, ip, user_agent, revoked_at, security_version) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
-                (sha256_hex(raw), user["id"], now, now, expires, (ip or "")[:64], (user_agent or "")[:300], current["security_version"]),
+                "(sid_hash, user_id, created_at, last_seen_at, expires_at, ip, user_agent, revoked_at, security_version, device_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                (sha256_hex(raw), user["id"], now, now, expires, (ip or "")[:64], (user_agent or "")[:300], current["security_version"], sha256_hex(device_id) if device_id else ""),
             )
             conn.execute(
                 "DELETE FROM user_sessions WHERE expires_at < ? OR revoked_at > 0",
