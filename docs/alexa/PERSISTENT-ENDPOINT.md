@@ -24,6 +24,10 @@ itself can still initialize after idle, and Amazon routing, stream resolution,
 network calls and Echo buffering still take time. Measure first audio bytes and
 real device callbacks; do not equate either with acoustic output.
 
+Amazon transport timeouts back off only the affected device/command lane.
+A stalled volume request cannot add a15-second delay to pause, seek or another
+Echo. Genuine Amazon429 responses still impose the account-wide cooldown.
+
 ## Boundaries and failure handling
 
 The worker pins the account and skill IDs. It checks HMAC-SHA256 over the exact

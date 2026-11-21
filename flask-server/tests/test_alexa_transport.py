@@ -102,3 +102,36 @@ class AmazonTransportTests(unittest.IsolatedAsyncioTestCase):
         await bounded_transport(owner,'echo',('volume',40),lambda:send('volume'))
         release.set();await running;await pause
         self.assertEqual(calls,['volume','pause'])
+
+    async def test_volume_timeout_does_not_block_pause_seek_or_another_echo(self):
+        now=[100.0];gate=AmazonTransport(timeout=.01,clock=lambda:now[0])
+        owner=SimpleNamespace(_amazon_transport=gate)
+        async def stalled():await asyncio.Event().wait()
+        with self.assertRaises(TransportDeferred):
+            await bounded_transport(owner,'echo-one',('volume',40),stalled)
+        for serial,key in (('echo-one','pause'),('echo-one','seek'),('echo-two','play')):
+            send=AsyncMock()
+            await bounded_transport(owner,serial,key,send)
+            send.assert_awaited_once()
+        send=AsyncMock()
+        with self.assertRaises(TransportDeferred):
+            await bounded_transport(owner,'echo-one',('volume',50),send)
+        send.assert_not_awaited()
+        self.assertEqual(gate.cooldown_until,0)
+
+    async def test_playback_timeout_is_isolated_from_another_echo(self):
+        now=[100.0];gate=AmazonTransport(timeout=.01,clock=lambda:now[0])
+        async def stalled():await asyncio.Event().wait()
+        with self.assertRaises(TransportDeferred):await gate.run('echo-one','play',stalled)
+        send=AsyncMock();await gate.run('echo-two','play',send);send.assert_awaited_once()
+        with self.assertRaises(TransportDeferred):await gate.run('echo-one','watchdog',stalled)
+
+    async def test_real_volume_rate_limit_still_blocks_all_account_playback(self):
+        gate=AmazonTransport();owner=SimpleNamespace(_amazon_transport=gate)
+        error=type('AlexapyTooManyRequestsError',(Exception,),{})('Too Many Requests')
+        with self.assertRaises(TransportDeferred):
+            await bounded_transport(owner,'echo-one',('volume',40),AsyncMock(side_effect=error))
+        for serial in ('echo-one','echo-two'):
+            send=AsyncMock()
+            with self.assertRaises(TransportDeferred):await bounded_transport(owner,serial,'pause',send)
+            send.assert_not_awaited()
