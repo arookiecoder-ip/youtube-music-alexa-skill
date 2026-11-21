@@ -27,7 +27,7 @@ def identity_params(kind, intent='', query=''):
         return {'include_resume': '1'}
     if kind == 'IntentRequest' and intent == 'PlaySongIntent' and isinstance(query, str):
         query = re.sub(r'^\s*silentmode\b[\s,]*', '', query, flags=re.IGNORECASE)
-        if re.fullmatch(r'\s*(?:the\s+)?app\s+selection\s*', query, flags=re.IGNORECASE):
+        if ' '.join(query.split()).casefold() in ('app selection', 'the app selection'):
             return {'include_play': '1'}
     return {}
 
