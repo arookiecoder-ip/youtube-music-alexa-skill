@@ -153,7 +153,7 @@ class Runtime(unittest.TestCase):
 
     def test_adapter_keeps_unknown_fields_decimals_and_saved_playlists(self):
         from decimal import Decimal
-        value={'future':{'n':Decimal('12.34')},'saved_playlists':['a','b']}
+        value={'future':{'n':Decimal('12.34')},'saved_playlists':['a','b'], 'binary':b'\x00\xff', 'binary_set':{b'a',b'b'}, 'string_set':{'a','b'}, 'number_set':{Decimal('1'),Decimal('2')}}
         with self.adapter.request(state_key(event(),BINDING),{'M':{}}) as state:
             self.adapter.save_attributes(envelope(),value)
             self.assertEqual(self.adapter.get_attributes(envelope()),value)
@@ -176,6 +176,12 @@ class Runtime(unittest.TestCase):
         self.assertEqual(first[0],{'device':'first'})
         self.assertEqual(second[0],{'device':'second'})
         self.assertNotEqual(first[1],second[1])
+
+    def test_binary_dynamodb_wire_values_are_validated_without_corruption(self):
+        p=payload();p['attributes']={'M':{'opaque':{'B':'AP8='},'set':{'BS':['YQ==','Yg==']}}}
+        self.assertEqual(self.post(p).status_code,200)
+        p=payload(event('different'));p['attributes']={'M':{'opaque':{'B':'invalid base64!'}}}
+        self.assertEqual(self.post(p).status_code,400)
 
     def test_actor_limits_timeout_and_cleanup(self):
         locks=ActorLocks(capacity=1)

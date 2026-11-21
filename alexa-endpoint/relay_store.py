@@ -1,5 +1,6 @@
 """Request-local skill attributes plus a durable, account-scoped replay ledger."""
 from contextlib import contextmanager
+import base64
 import json
 import os
 import sqlite3
@@ -8,6 +9,27 @@ import threading
 from ask_sdk_core.attributes_manager import AbstractPersistenceAdapter
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from skill_security import persistence_key
+
+
+def _attribute(value, *, encode):
+    """Bridge AWS JSON base64 binary values and boto3's in-memory byte values."""
+    if not isinstance(value, dict) or len(value) != 1:
+        raise ValueError('invalid DynamoDB attribute')
+    kind, data = next(iter(value.items()))
+    if kind == 'M':
+        data = {key: _attribute(item, encode=encode) for key, item in data.items()}
+    elif kind == 'L':
+        data = [_attribute(item, encode=encode) for item in data]
+    elif kind in ('B', 'BS'):
+        def convert(item):
+            return (base64.b64encode(item).decode('ascii') if encode
+                    else base64.b64decode(item, validate=True))
+        data = convert(data) if kind == 'B' else [convert(item) for item in data]
+    return {kind: data}
+
+
+def deserialize_attributes(value):
+    return TypeDeserializer().deserialize(_attribute(value, encode=False))
 
 
 class RelayAdapter(AbstractPersistenceAdapter):
@@ -32,11 +54,11 @@ class RelayAdapter(AbstractPersistenceAdapter):
         return state
 
     def get_attributes(self, request_envelope):
-        return TypeDeserializer().deserialize(self._state(request_envelope)['attributes'])
+        return deserialize_attributes(self._state(request_envelope)['attributes'])
 
     def save_attributes(self, request_envelope, attributes):
         state = self._state(request_envelope)
-        value = TypeSerializer().serialize(attributes)
+        value = _attribute(TypeSerializer().serialize(attributes), encode=True)
         if len(json.dumps(value).encode()) > 400 * 1024:
             raise ValueError('skill attributes exceed bounds')
         state.update(attributes=value, dirty=True)

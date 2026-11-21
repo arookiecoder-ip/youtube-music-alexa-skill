@@ -110,8 +110,8 @@ def create_app(adapter, handler, ledger, *, secret, account_id, skill_id):
             attrs = payload['attributes']
             if not isinstance(attrs, dict) or set(attrs) != {'M'} or len(json.dumps(attrs).encode()) > 400 * 1024:
                 raise ValueError('persistence bounds')
-            from boto3.dynamodb.types import TypeDeserializer
-            TypeDeserializer().deserialize(attrs)
+            from relay_store import deserialize_attributes
+            deserialize_attributes(attrs)
         except (KeyError, ValueError, TypeError, AttributeError, OverflowError, RecursionError):
             return '', 400
         acquired = locks.acquire(actor)
