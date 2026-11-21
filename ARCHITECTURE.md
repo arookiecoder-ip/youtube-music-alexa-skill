@@ -4,13 +4,14 @@ Updated 2026-11-21 for production, podcast language selection, download race rec
 
 ## Runtime and authority
 
-Each account owns its queue, output lease and provider sessions; browser/phone/Echo renderers operate within that account. Owners may invite restricted Jam guests. One Flask process is authoritative for shared queue and output state. The supported Docker image runs Waitress with 16 threads; ownership locks, leases, queue decisions, URL caches and in-memory counters are process-local. Multiple independent WSGI processes/replicas would split that authority.
+Each account owns its queue, output lease and provider sessions; browser/phone/Echo renderers operate within that account. Owners may invite restricted Jam guests. One Flask process is authoritative for shared queue and output state. The supported Docker image starts an aiohttp gateway in front of a 16-thread loopback Waitress listener plus a separate four-thread playback-control listener in the same process; ownership locks, leases, queue decisions, URL caches and in-memory counters are process-local. Multiple independent WSGI processes/replicas would split that authority.
 
 ```mermaid
 flowchart TB
     Browser[Web / PWA controller and renderer] --> HTTPS[Caddy HTTPS]
     App[Native Android controller and renderer] --> HTTPS
-    HTTPS --> API[Flask API / shared state]
+    HTTPS --> Gateway[Async HTTP and event gateway]
+    Gateway --> API[Flask API / shared state]
     API --> Store[SQLite persistence]
     API --> Catalog[ytmusicapi catalog / account data]
     API --> Resolver[Private Node YouTube.js resolver per credential]
@@ -23,7 +24,8 @@ flowchart TB
     API --> Amazon[AlexaPy / Amazon text command]
     Amazon --> Echo
     Echo --> Skill[Custom skill / Lambda]
-    Skill --> API
+    Skill --> Runtime[Persistent signed Alexa runtime]
+    Runtime --> API
     API --> Auth[Private Chromium authentication sidecar]
 ```
 
@@ -96,7 +98,7 @@ SQLite persists shared queue/cursor/output preference through coalesced writes. 
 
 A refresh reuses the browser identity within a short reconnect grace rather than immediately declaring the renderer offline. A real close/unload or expired presence can move active playback to an eligible foreground receiver under a checked transfer; it must not arbitrarily select another online device on refresh or auto-play a merely saved/paused queue. Lost unload delivery falls back to TTL behavior.
 
-The web client uses finite JSON state reads and action-triggered refreshes. Current base polling in `ui-state.js` is 500 ms when foreground or processing, 5 seconds background-playing, 30 seconds background-paused; failures back off to at most 60 seconds. Presence can wake commands/handoffs promptly. [sse.js](flask-server/templates/static/js/sse.js) is a historical filename, not proof of permanent SSE: `/alexa/now_playing/stream` emits one snapshot and closes to avoid exhausting Waitress threads.
+Native and browser clients can subscribe to the bounded, cookie-authenticated `/api/app/events/` WebSocket. The async gateway waits on playback events without occupying Waitress threads, checks origins and subscription identity, and uses a separate bounded control/snapshot pool. Finite JSON reads and backoff remain available for refresh/recovery; the legacy `/alexa/now_playing/stream` route emits one snapshot and closes. There is one process-local playback authority, not one independent authority per listener.
 
 The Android client independently uses presence-triggered state refresh plus a 5-second healthy foreground backup, fast processing/unhealthy fallbacks and its own local clock. Do not apply one client's poll constants to every renderer.
 
@@ -174,3 +176,7 @@ A request deadline aborts work, releases pending capacity and prevents late resu
 ## Android download attempt ownership
 
 Android's `DownloadManager` still owns file transfer and resume, while Room owns manifests. `DownloadAttempts` assigns each queued attempt an identity, and every OS transfer uses a unique destination file. Cancelling invalidates that identity before a retry can start. A late old enqueue is removed without touching its successor, and its `finally` block cannot remove the newer queue entry. Completed-file validation rechecks membership after IO so cancellation during validation cannot resurrect a download. Mutations wait for manifest restoration. Collection membership survives removal, allowing explicit retry.
+
+## Persistent Alexa transport
+
+When configured, the Lambda entrypoint uses `runtime_relay.py` to send signed, size-bounded envelopes to the private `/alexa/skill/relay/` service. The relay separates request/response signatures, timestamp and nonce checks, and skill/account/device binding. The persistent runtime uses bounded actor locks and a replay ledger and keeps the ASK runtime warm; DynamoDB reads/writes and AWS credentials stay in Lambda. The legacy/bootstrap path remains supported. The audit ran both the Lambda SDK and persistent endpoint suites; this change did not require a Lambda code rollout.

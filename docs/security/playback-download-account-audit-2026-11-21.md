@@ -51,3 +51,17 @@ Safe cleanup in this change removes invalid download destinations, avoids obsole
 - [Android change and live CI results](https://github.com/arookiecoder-ip/MusicBox-APP/pull/32): JVM checks, account/device/player UI, signing, optimized release and upgrade/install checks. The initial signed build and JVM checks passed in [Actions](https://github.com/arookiecoder-ip/MusicBox-APP/actions/runs/44918340549); final source and publication use the subsequent main-branch run.
 
 Production deployment is performed by the backend master-branch Actions workflow after merge. Stable APK publication is performed by the main-branch Android Actions workflow only after signing and upgrade checks pass. Workflow links expose final status; local test results are not a substitute for those gates.
+
+## Production rollout verified
+
+- Runtime image revision: `56714541eaecd54deac88d1d79b5dd356dead941`. [Verified-image deployment succeeded](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/actions/runs/44921049856). The subsequent master change only improves deployment workflow/runbook handling for slow links; no compilation ran on the server.
+- Account database migrated successfully to schema 16 with the hashed installation column.
+- The exact podcast defaults to `hi.4` (Hindi original); `en-US.10` is available and marked AI dubbed. Both returned HTTP 206 with correct 1,024-byte ranges and separate representation identities. English resume returned `bytes 1024-2047/79456025`.
+- The public HTTPS route also returned valid 1,024-byte 206 responses for both languages. Public readiness returned 200; unauthenticated audio/proxy checks returned 401.
+- A complete song download returned all **3,567,945 declared bytes** in 1.13 seconds. SHA-256: `0acbfca028e19bc129683d2564c597c5161a4384dcac28258288c13d562e7dd2`.
+- A clearly labelled synthetic error traversed the redacted journal/alert mail pipeline and was **accepted by the configured SMTP server**. The recipient address and credentials were not printed. Mailbox delivery is not inferred from SMTP acceptance.
+- [Android 2.5.16 is published](https://github.com/arookiecoder-ip/MusicBox-APP/releases/tag/v2.5.16): version code 134, pinned signing identity, optimized non-debuggable APK, checksums, and successful API 33/36 install/upgrade/cold-launch gates. [Publication workflow](https://github.com/arookiecoder-ip/MusicBox-APP/actions/runs/44921416692).
+- Final app JVM checks: **576 tests**, zero failures/errors/skips. Functional device checks passed 39 account/player tests, plus 21 phone and 23 tablet cases, including the separate-UID media-session security probe. Diagnostic screenshot export is tested separately from the published APK.
+- Android lint reported zero errors/fatal findings; low-priority warnings and reviewed security-related warnings are recorded in [the Android audit](https://github.com/arookiecoder-ip/MusicBox-APP/blob/main/docs/AUDIT-2026-11-21.md).
+
+Older session records without installation proof remain explicit sign-out entries; merging them by a shared address or browser name would risk revoking independent devices. Existing downloaded files are preserved rather than overwritten during a server language-default change. Re-download an older podcast copy if it contains the previous dubbed audio.
