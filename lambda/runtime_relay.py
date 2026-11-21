@@ -14,6 +14,7 @@ import skill_bootstrap
 
 _client = None
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 QUIET = {'version': '1.0', 'response': {'shouldEndSession': True}}
 
 
