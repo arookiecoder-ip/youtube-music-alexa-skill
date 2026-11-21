@@ -1,6 +1,6 @@
 # Music Box backend architecture
 
-Updated for the security remediation working tree based on `a17cc6c`. See [security rollout and verification](docs/SECURITY-ROLLOUT.md) and the [account route contract](docs/api-security-contract.json).
+Updated 2026-11-21 for production, podcast language selection, download race recovery and browser session rotation. See [security rollout and verification](docs/SECURITY-ROLLOUT.md) and the [account route contract](docs/api-security-contract.json).
 
 ## Runtime and authority
 
@@ -158,3 +158,19 @@ All email-change entry points share the service policy: current password plus re
 `browser_coordination.py` serializes access to the physical browser across interactive, scripted and automatic flows. Commands and queued work carry an attempt capability; captured candidates are generation-fenced. Amazon form promotion revalidates the active login after network waits. `auth_sessions.py`, `alexa_identity.py`, `stream_pools.py` and `provider_commands.py` move security/lifecycle boundaries out of HTTP composition; continue extracting playback coordination incrementally while retaining one authoritative process.
 
 Public `/health/live` and `/health/ready` expose only liveness/readiness. Readiness checks local storage and configured authentication, not optional provider uptime. Status diagnostics report effective global stream admission separately from per-account capacity. Builds use hashed Python locks, pinned container/action digests, non-root execution and bounded resources. Security CI runs advisory, container, secret, capability and restore checks. Offline encrypted backup/restore and key rotation live in `scripts/security_storage.py`; restoring retires sessions, email proofs, pairing and scoped capabilities. A browser/provider login and physical Echo test are still required for a deployment-specific rollout.
+
+## Podcast representations and resolver recovery
+
+`resolver.mjs` filters stable AAC itag 140 formats and prefers an original, non-DRC track before localized defaults. Language metadata is a public-safe subset of the provider response. Explicit selection uses an exact provider audio-track ID; a missing track fails instead of silently changing language. Resolver URL cache/coalescing keys include credential generation, video and track. Python representation ETags include the chosen track so byte-range recovery cannot splice languages even when lengths match. Explicit language requests do not read retained original-track bytes.
+
+A request deadline aborts work, releases pending capacity and prevents late results entering the URL cache. A timed-out session handshake is discarded. These bounds complement Python's worker timeout/restart and the Android buffering-stall recovery; an upstream outage must not permanently exhaust resolver slots.
+
+## Session rotation and error reporting
+
+`auth_sessions.create_browser_session` validates or creates a signed, random installation cookie. `AccountService.create_session` atomically retires matching sessions for that account before inserting a fresh authentication token. Migration 16 adds the hashed installation column/index. Device identity never uses IP or user-agent heuristics and conveys no access. Authentication replacement clears session state while retaining the separate device cookie. Android persists this cookie across sign-out but excludes it from authentication checks.
+
+`status_journal.Journal` applies its existing secret redaction before passing an error row to `error_alerts.ErrorAlerts`. Producers only use a bounded in-memory queue. A dedicated worker batches duplicate errors by level/source/message/trace/route, includes occurrence counts and timestamps, and sends through the existing mail configuration without an application logger. Failed deliveries retain bounded groups for retry. Queue overflow is counted; pending emails do not survive process termination. Journal retention and email delivery are independent.
+
+## Android download attempt ownership
+
+Android's `DownloadManager` still owns file transfer and resume, while Room owns manifests. `DownloadAttempts` assigns each queued attempt an identity, and every OS transfer uses a unique destination file. Cancelling invalidates that identity before a retry can start. A late old enqueue is removed without touching its successor, and its `finally` block cannot remove the newer queue entry. Completed-file validation rechecks membership after IO so cancellation during validation cannot resurrect a download. Mutations wait for manifest restoration. Collection membership survives removal, allowing explicit retry.

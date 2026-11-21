@@ -55,3 +55,13 @@ class ErrorAlertTests(unittest.TestCase):
         self.assertEqual(self.alerts.pending.qsize(), 1)
         self.alerts.flush()
         self.assertIn('3 additional errors', self.sent[0])
+
+    def test_library_error_logs_are_alerted_while_library_info_is_quiet(self):
+        import logging
+        from status_journal import JournalHandler
+        handler = JournalHandler(lambda: self.journal)
+        handler.emit(logging.LogRecord('urllib3.connectionpool', logging.INFO, '', 0, 'normal retry', (), None))
+        handler.emit(logging.LogRecord('urllib3.connectionpool', logging.ERROR, '', 0, 'upstream failed', (), None))
+        self.alerts.flush()
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn('upstream failed', self.sent[0][1])

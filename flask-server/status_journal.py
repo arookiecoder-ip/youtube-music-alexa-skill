@@ -206,7 +206,7 @@ class JournalHandler(logging.Handler):
     def emit(self, record):
         try:
             # HTTP lines get a separate structured record without URL arguments.
-            if record.funcName == '_log_request' or record.name.startswith(('werkzeug', 'urllib3')):
+            if record.levelno < logging.ERROR and (record.funcName == '_log_request' or record.name.startswith(('werkzeug', 'urllib3'))):
                 return
             context = self.context()
             if context.pop('quiet', False) and record.levelno < logging.ERROR: return
