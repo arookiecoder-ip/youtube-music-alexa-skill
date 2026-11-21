@@ -1,5 +1,6 @@
 from playback_events import playback_events
 from liked_songs_cache import LikedSongsCache
+from auth_sessions import create_browser_session
 from browser_coordination import browser_scope, BROKER
 import provider_commands
 from auth_sessions import replace_identity, password_change_allowed, complete_login
@@ -4340,9 +4341,8 @@ def _error_code_for_status(status: int) -> str:
 # Phase 12: Request logging middleware -- logs method, path, status, duration for every request.
 @app.after_request
 def _log_request(response):
-    path = request.path
-    if request.url_rule and any(marker in request.url_rule.rule for marker in ("<token>", "<secret>")):
-        path = request.url_rule.rule
+    # Route templates cannot contain credentials embedded in path parameters.
+    path = request.url_rule.rule if request.url_rule else '/unmatched'
     # Skip static files and SSE streams to keep logs readable
     if path.startswith('/static/') or path == '/alexa/now_playing/stream':
         return response
@@ -4358,14 +4358,14 @@ def _log_request(response):
                 code = body['error'].get('code', '')
                 if code:
                     extra = f' code={code}'
-            elif isinstance(body.get('error'), str):
-                extra = f" msg={body['error'][:60]!r}"
         except Exception:
             pass
-    args = request.args.to_dict()
-    for sensitive in ('key', 'cap', 'token', 'access_token', 'code'):
-        if sensitive in args:
-            args[sensitive] = '***'
+    # An allowlist also covers new/unknown credential query names. Never print
+    # search text, URLs, account identifiers or sign-in proofs to stdout.
+    args = {key: (value if (key == 'video_id' and _valid_video_id(value)) or
+                   (key in {'wait', 'info', 'prefetch', 'audio_check', 'limit', 'offset', 'queue_version'}
+                    and re.fullmatch(r'[0-9]{1,12}', value)) else '***')
+            for key, value in request.args.items()}
     logger.info('[%s] %s %s -> %s%s (%.1fms)', request.method, path,
                 args or '', response.status_code, extra,
                 duration * 1000)
@@ -6245,7 +6245,13 @@ def audio_stream():
     if _audio_truthy(request.args.get('prefetch')):
         _ensure_audio_ready_for_play(video_id, prefetch=True)
         return jsonify({'video_id':video_id, 'cached':False, 'streaming':True}), 202
-    response = _serve_youtube_stream(video_id, meta=meta)
+    if _audio_truthy(request.args.get('audio_tracks')):
+        try:
+            media = _youtube_stream_for().resolve(video_id)
+            return jsonify({'audio_tracks': media.get('audio_tracks', []), 'selected': media.get('audio_track', '')})
+        except StreamError as error:
+            return error_response('Audio languages are temporarily unavailable.', error.status, code=error.code)
+    response = _serve_youtube_stream(video_id, meta=meta, audio_track=request.args.get('audio_track'))
     if request.headers.get('X-MusicBox-Download') == '1' and response.status_code in (200,206):
         response.headers['Content-Disposition'] = f'attachment; filename="{video_id}.m4a"'
     return response
@@ -6275,7 +6281,7 @@ def _stream_superseded(video_id) -> bool:
 
 
 
-def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None):
+def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None, audio_track=None):
     generation = _current_playback_generation()
     started = time.monotonic()
     # Snapshot before resolution/open: a pause or handoff during that network
@@ -6293,7 +6299,8 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
     stream_identity = _current_identity()
     try:
         relay = _youtube_stream_for().open(video_id, method=request.method,
-            byte_range=request.headers.get('Range'), if_range=request.headers.get('If-Range'))
+            byte_range=request.headers.get('Range'), if_range=request.headers.get('If-Range'),
+            **({'audio_track': audio_track} if audio_track else {}))
     except StreamError as error:
         # Upstream URLs/cookies never cross the API or enter the journal.
         response, status = error_response('Audio stream is temporarily unavailable.', error.status,
@@ -7578,7 +7585,7 @@ def login():
                                  'security_version': user['security_version'],
                                  'next': _safe_spa_target(body.get('next'))}, bind)
             return jsonify(ok=True, totp_required=True, token=token)
-        raw_sid = layer.accounts.create_session(user, ip=ip, user_agent=user_agent)
+        raw_sid = create_browser_session(layer.accounts, user, ip=ip, user_agent=user_agent)
         complete_login(layer, user, ip)
         replace_identity()
         session['mu_sid'] = raw_sid
@@ -7615,7 +7622,7 @@ def login():
             if (not user or user.get('status') != 'active'
                     or not layer.accounts.totp_is_enabled(user)):
                 return error_response('login timed out, start again', 401)
-            raw_sid = layer.accounts.create_session(
+            raw_sid = create_browser_session(layer.accounts,
                 user, ip=_client_ip(),
                 user_agent=request.headers.get('User-Agent', '')[:400])
             complete_login(layer, user, _client_ip())
@@ -7681,7 +7688,7 @@ def login():
                     'next': _safe_spa_target(body.get('next')),
                 }, bind)
                 return jsonify({'ok': True, 'totp_required': True, 'token': pending_token})
-            raw_sid = layer.accounts.create_session(
+            raw_sid = create_browser_session(layer.accounts,
                 mu_user, ip=ip, user_agent=user_agent)
             complete_login(layer, mu_user, ip)
             replace_identity()
@@ -13988,6 +13995,25 @@ def _status_log_context():
     quiet = request.path.startswith(('/api/status', '/static/')) or request.path.rstrip('/') == '/status'
     return {'request_id': request.environ.get('musicbox.trace', ''),
             'route': str(request.url_rule) if request.url_rule else '/unmatched', 'quiet': quiet}
+
+
+def _deliver_error_alert(subject, text):
+    from multiuser.mailer import Mailer, MailResult
+    layer = _multiuser_layer
+    if layer is None:
+        return MailResult('disabled', 'Account mail is not configured.')
+    recipient = layer.config.admin_email
+    if not recipient:
+        owner = layer.db.fetchone("SELECT email FROM users WHERE role='owner' AND status='active' AND email_verified=1 ORDER BY created_at LIMIT 1")
+        recipient = owner['email'] if owner else ''
+    if not recipient:
+        return MailResult('disabled', 'No administrator email is configured.')
+    return Mailer(layer.mailer.config, logger=None).send(recipient, subject, text)
+
+
+from error_alerts import ErrorAlerts
+_error_alerts = ErrorAlerts(_deliver_error_alert)
+_status_journal.error_callback = _error_alerts.submit
 
 
 _status_log_handler = JournalHandler(lambda: _status_journal, _status_log_context)

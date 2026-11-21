@@ -46,6 +46,7 @@ class Journal:
         self._last_cleanup = 0
         self._initialized = False
         self.worker = None
+        self.error_callback = None
         if start:
             self.worker = threading.Thread(target=self._run, daemon=True, name='status-journal')
             self.worker.start()
@@ -92,6 +93,9 @@ class Journal:
                    redact(source, secrets)[:80], redact(message, secrets), safe_trace.encode('utf-8', errors='replace')[:2048].decode('utf-8', errors='ignore'),
                    request_id if re.fullmatch(r'[a-f0-9]{32}', request_id) else '',
                    route[:160] if re.fullmatch(r'/[A-Za-z0-9_/< >:.\-]*', route) else '', int(level in ('ERROR', 'CRITICAL')))
+            if row[-1] and self.error_callback:
+                try: self.error_callback(row)
+                except Exception: pass
             (self.errors if row[-1] else self.normal).put_nowait(row)
             self._wake.set()
         except Exception:
@@ -202,7 +206,7 @@ class JournalHandler(logging.Handler):
     def emit(self, record):
         try:
             # HTTP lines get a separate structured record without URL arguments.
-            if record.funcName == '_log_request' or record.name.startswith(('werkzeug', 'urllib3')):
+            if record.levelno < logging.ERROR and (record.funcName == '_log_request' or record.name.startswith(('werkzeug', 'urllib3'))):
                 return
             context = self.context()
             if context.pop('quiet', False) and record.levelno < logging.ERROR: return

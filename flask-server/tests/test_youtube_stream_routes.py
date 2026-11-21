@@ -153,4 +153,24 @@ class StreamRoutes(unittest.TestCase):
         self.assertTrue(self.upstream.closed)
         self.release.assert_called_once()
 
+
+    def test_audio_language_metadata_requires_auth_and_never_returns_signed_urls(self):
+        service=server._youtube_stream_for()
+        self.addCleanup(mock.patch.stopall)
+        resolve=mock.patch.object(service,'resolve').start()
+        resolve.return_value={'audio_tracks':[{'id':'hi.4','label':'Hindi','original':True}], 'audio_track':'hi.4', 'url':'https://private.googlevideo.com/private'}
+        response=self.client.get('/audio/?video_id='+VID+'&audio_tracks=1',headers=self.headers)
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json['selected'],'hi.4')
+        self.assertNotIn('googlevideo',response.get_data(as_text=True))
+        response=self.client.get('/audio/?video_id='+VID+'&audio_tracks=1')
+        self.assertEqual(response.status_code,401)
+
+    def test_language_selection_is_forwarded_and_download_remains_attachment(self):
+        response=self.client.get('/audio/?video_id='+VID+'&audio_track=en.4',headers={**self.headers,'X-MusicBox-Download':'1'})
+        self.assertEqual(response.status_code,200)
+        server._youtube_stream_for().open.assert_called_once_with(VID,method='GET',byte_range=None,if_range=None,audio_track='en.4')
+        self.assertIn('.m4a',response.headers['Content-Disposition'])
+        response.close()
+
 if __name__=='__main__':unittest.main()

@@ -2,14 +2,14 @@
 
 # Music Box backend and Alexa skill
 
-The complete multi-user backend, admin/web UI and private Alexa source are maintained on this `feat/multi-user` branch. The [standalone downloadable Alexa package](alexa-private-skill/) belongs to this branch. [Android source](https://github.com/arookiecoder-ip/MusicBox-APP/tree/feat/multi-user) lives in its own repository.
+The production backend, admin/web UI, persistent Alexa endpoint and private Alexa source are maintained on `master`. The [standalone Alexa package](alexa-private-skill/) is included. [Android source](https://github.com/arookiecoder-ip/MusicBox-APP) lives in its own repository on `main`.
 
 
 Self-hosted YouTube Music catalog, progressive audio relay, web/PWA player and shared playback control for browsers, Android phones and Alexa Echo devices.
 
 [Architecture](ARCHITECTURE.md) · [Changelog and PR history](CHANGELOG.md) · [Android app](https://github.com/arookiecoder-ip/MusicBox-APP) · [Docker setup](SETUP-DOCKER.md)
 
-Reviewed 2026-10-25 against `master` at `08139f16aac382d80703d59104838c4ecd1fb40a`. The backend is documented by commit/date; Android's 2.4.50 version is not a backend release number.
+Updated 2026-11-21. Backend changes are identified by commit/date; Android has its own release version. See the [playback, downloads and security audit](docs/security/playback-download-account-audit-2026-11-21.md).
 
 ## What it does
 
@@ -27,6 +27,20 @@ The Docker image enables the persistent YouTube.js YTMUSIC resolver in [flask-se
 **There is no persistent multi-song server audio cache.** Only received bytes of the current track can be retained in one anonymous temporary file. Confirmed next-track playback replaces it; same-song resume/handoff keeps it; URL warmup and Echo next-song prebuffering do not evict the song still playing. The 64 MiB limit is a per-current-track safety ceiling, not a retained-library budget. Explicit downloads stream to the client.
 
 The Android app independently maintains temporary current/next-five audio and persistent user downloads. Removing server song storage did not remove phone offline playback, account metadata, artwork, URL preparation or the browser's media buffer. See [Streaming audio](docs/STREAMING_AUDIO.md).
+
+## Podcast audio and device sessions
+
+Original audio is selected before localized or AI-generated dubs for phone, browser and Echo streams. The Android player menu exposes **Audio language** for phone streaming; selecting a language keeps the queue, position and play/pause intent. Downloads retain original audio. Offline files cannot acquire another audio track without streaming. Language discovery uses authenticated `GET /audio/?video_id=…&audio_tracks=1`; an explicit `audio_track` selects a provider track ID. Signed media URLs never leave the relay.
+
+Repeated sign-in rotates and revokes the old session for the same signed browser installation. Independent browsers with the same address and user-agent remain separate devices. Existing rows without installation identity cannot safely be merged by appearance; their current session is adopted on the next successful login. The installation cookie grants no authentication.
+
+## Administrator error email
+
+Server journal `ERROR` and `CRITICAL` entries, including HTTP 5xx and unhandled background-thread failures, enter a bounded nonblocking email queue. Once per minute the worker sends a digest with UTC times, severity, source, journal/request IDs, route, redacted message, stack locations and occurrence counts. SMTP failures retry on the next interval without recursively logging an error email. The in-memory queue is not durable across a process crash; the journal remains available separately.
+
+Delivery uses the existing `MULTIUSER_SMTP_*` and `MULTIUSER_MAIL_FROM` configuration. The recipient is `MULTIUSER_ADMIN_EMAIL`, or the earliest active verified owner when no explicit admin address is configured. Missing SMTP uses the existing private outbox. No request headers, bodies, cookies, passwords or signed media URLs are included. Review `/status` for retained errors and errors exceeding the bounded alert buffer.
+
+Build Android APKs and backend images in GitHub Actions. The server receives tested prebuilt images; do not run Gradle or Docker image builds on the deployment host.
 
 ## Deployment layout
 

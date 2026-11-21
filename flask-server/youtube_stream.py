@@ -241,7 +241,7 @@ class Resolver:
                     self.close()
             process.stdout.close()
 
-    def resolve(self, video_id=None, refresh=False):
+    def resolve(self, video_id=None, refresh=False, audio_track=None):
         if video_id is not None and not re.fullmatch(r'[A-Za-z0-9_-]{11}', video_id):
             raise StreamError('invalid_video', 400)
         waiter = queue.Queue(maxsize=1)
@@ -284,7 +284,7 @@ class Resolver:
             try:
                 self._process.stdin.write(json.dumps({
                     'id': request_id, 'action': 'init' if video_id is None else 'resolve',
-                    'video_id': video_id, 'cookie_file': cookie_path, 'refresh': refresh})+'\n')
+                    'video_id': video_id, 'cookie_file': cookie_path, 'refresh': refresh, 'audio_track': audio_track})+'\n')
                 self._process.stdin.flush()
             except (OSError, ValueError):
                 self.close()
@@ -300,7 +300,7 @@ class Resolver:
             if reply.get('error'):
                 code = reply['error']
                 raise StreamError(code, {'track_unavailable':404, 'unsupported_format':422,
-                                        'invalid_video':400}.get(code, 503))
+                                        'invalid_video':400, 'audio_track_unavailable':404, 'invalid_audio_track':400}.get(code, 503))
             result = reply.get('result', {})
             if video_id is not None and not valid_media_url(result.get('url')):
                 raise StreamError('invalid_media', 502)
@@ -387,15 +387,18 @@ class YouTubeStream:
             resolver.close()
             atexit.unregister(resolver.close)
 
-    def resolve(self, video_id=None, refresh=False):
-        return self._active_resolver().resolve(video_id, refresh=refresh)
+    def resolve(self, video_id=None, refresh=False, audio_track=None):
+        return self._active_resolver().resolve(video_id, refresh=refresh, **({'audio_track': audio_track} if audio_track else {}))
 
     def metadata(self, video_id):
         """Public metadata only; signed transport URLs never leave the relay."""
         metadata = self.resolve(video_id).get('metadata') or {}
         return {key: metadata[key] for key in ('video_id', 'title', 'artist', 'thumbnail', 'duration_ms', 'is_live') if key in metadata}
 
-    def open(self, video_id, method='GET', byte_range=None, if_range=None):
+    def open(self, video_id, method='GET', byte_range=None, if_range=None, audio_track=None):
+        if audio_track and not re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', audio_track):
+            raise StreamError('invalid_audio_track', 400)
+        cache_video = video_id + ':' + audio_track if audio_track else video_id
         if byte_range and not re.fullmatch(r'bytes=(?:\d+-\d*|-\d+)', byte_range):
             raise StreamError('invalid_range', 416)
         if self._retired or not self.slots.acquire(blocking=False):
@@ -416,10 +419,10 @@ class YouTubeStream:
         upstream = None
         try:
             try:
-                cached = self.current.open(video_id, byte_range, if_range, method=='HEAD')
+                cached = self.current.open(cache_video, byte_range, if_range, method=='HEAD')
             except ValueError:
                 with self.current.lock:
-                    length = self.current.length if self.current.video == video_id else 0
+                    length = self.current.length if self.current.video == cache_video else 0
                 headers = {'Content-Range':f'bytes */{length}'} if length else {}
                 raise StreamError('invalid_range', 416, headers) from None
             if cached:
@@ -432,11 +435,11 @@ class YouTubeStream:
                     relay.headers.update({'ETag':cached.headers['ETag'], 'Cache-Control':'no-store',
                         'X-Audio-Delivery':'youtube-stream', 'X-Audio-Source':'current-track'})
                     return relay
-            ticket = self.current.ticket(video_id)
+            ticket = self.current.ticket(cache_video)
             for attempt in range(2):
-                media = self.resolve(video_id, refresh=bool(attempt))
+                media = self.resolve(video_id, refresh=bool(attempt), **({'audio_track': audio_track} if audio_track else {}))
                 etag = '"'+hashlib.sha256(
-                    f'{video_id}:{media.get("itag")}:{media.get("length")}:{media.get("modified")}'.encode()
+                    f'{video_id}:{media.get("itag")}:{media.get("audio_track", "")}:{media.get("length")}:{media.get("modified")}'.encode()
                 ).hexdigest()+'"'
                 headers = {'Accept-Encoding': 'identity'}
                 # If-Range must compare the same stable representation, not a
@@ -477,9 +480,9 @@ class YouTubeStream:
                         original_etag = etag
                         def reopen(offset, last, refresh, original_etag=original_etag):
                             if refresh:
-                                refreshed = self.resolve(video_id, refresh=True)
+                                refreshed = self.resolve(video_id, refresh=True, **({'audio_track': audio_track} if audio_track else {}))
                                 refreshed_etag = '"'+hashlib.sha256(
-                                    f'{video_id}:{refreshed.get("itag")}:{refreshed.get("length")}:{refreshed.get("modified")}'.encode()
+                                    f'{video_id}:{refreshed.get("itag")}:{refreshed.get("audio_track", "")}:{refreshed.get("length")}:{refreshed.get("modified")}'.encode()
                                 ).hexdigest()+'"'
                                 if refreshed_etag != original_etag:
                                     raise StreamError('audio_representation_changed', 502)

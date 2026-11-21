@@ -93,6 +93,9 @@ def describe_user_agent(user_agent: str | None) -> str:
         return ""
     lowered = ua.lower()
 
+    if "ktor" in lowered or "musicbox" in lowered:
+        return "Music Box app"
+
     browser = ""
     for needle, name in _BROWSERS:
         if needle in lowered:

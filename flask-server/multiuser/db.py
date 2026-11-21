@@ -13,7 +13,7 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 16
 
 _SCHEMA_V1 = (
     """
@@ -442,6 +442,10 @@ class Database:
                 conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_alexa_one_active_token ON alexa_access_tokens(user_id) WHERE revoked_at=0")
                 conn.execute("INSERT INTO multiuser_schema_migrations VALUES (15, ?)", (time.time(),))
 
+            if 16 not in applied:
+                conn.execute("ALTER TABLE user_sessions ADD COLUMN device_hash TEXT NOT NULL DEFAULT ''")
+                conn.execute("CREATE INDEX idx_user_sessions_device ON user_sessions(user_id, device_hash)")
+                conn.execute('INSERT INTO multiuser_schema_migrations VALUES (16, ?)', (time.time(),))
             now = time.time()
             # Bound the audit journal so a long-lived install cannot grow it
             # without limit. 90 days is intentionally conservative.

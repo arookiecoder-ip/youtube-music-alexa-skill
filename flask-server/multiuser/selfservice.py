@@ -16,6 +16,8 @@ Nothing here imports ``server.py`` -- the layer stays optional.
 """
 from __future__ import annotations
 
+from auth_sessions import create_browser_session
+
 from auth_sessions import password_change_allowed
 
 import hmac
@@ -636,7 +638,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             except AccountError as exc:
                 return page(exc.public_message, 422)
             from auth_sessions import replace_identity, complete_login
-            raw_sid = mu.accounts.create_session(user, ip, ua)
+            raw_sid = create_browser_session(mu.accounts, user, ip, ua)
             complete_login(mu, user, ip)
             replace_identity()
             session["mu_sid"] = raw_sid

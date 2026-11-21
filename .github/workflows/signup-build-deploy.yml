@@ -8,7 +8,7 @@ on:
         type: boolean
         default: true
   push:
-    branches: [master, feat/multi-user, release/production-cutover]
+    branches: [master, feat/multi-user, release/production-cutover, fix/podcast-download-account]
     paths:
       - flask-server/**
       - .github/workflows/signup-build-deploy.yml
@@ -31,6 +31,16 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --require-hashes -r requirements-tests.lock
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Resolver language selection and timeout recovery regressions
+        working-directory: flask-server/youtube-stream
+        run: npm ci --ignore-scripts && npm test
+      - name: Podcast relay, downloads, session rotation and admin error email
+        env:
+          PYTHONPATH: flask-server:flask-server/tests
+        run: python -m unittest test_youtube_stream test_youtube_stream_routes test_current_audio_routes test_audio_credentials test_browser_device_sessions test_error_alerts -q
       - name: Signup and account security regressions
         env:
           PYTHONPATH: flask-server:flask-server/tests
