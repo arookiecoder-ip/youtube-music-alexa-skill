@@ -15,6 +15,7 @@ class _Lane:
     latest_key: object = None
     latest_task: object = None
     waiters: dict = field(default_factory=dict)
+    cooldown_until: float = 0.0
 
 
 class AmazonTransport:
@@ -33,13 +34,16 @@ class AmazonTransport:
                 async with lane.lock:
                     if revision != lane.revision:
                         raise TransportDeferred('Playback request was replaced by a newer command.')
-                    remaining = self.cooldown_until - self.clock()
+                    remaining = max(self.cooldown_until, lane.cooldown_until) - self.clock()
                     if remaining > 0:
                         raise TransportDeferred(f'Amazon is temporarily busy. Retry in {max(1, int(remaining + 1))} seconds.')
                     try:
                         return await asyncio.wait_for(operation(), timeout=self.timeout)
                     except asyncio.TimeoutError as error:
-                        self.cooldown_until = max(self.cooldown_until, self.clock() + self.cooldown)
+                        # A timeout proves only that this operation stalled.
+                        # Volume has its own lane and must not suppress pause,
+                        # seek or another Echo. Actual 429s remain account-wide.
+                        lane.cooldown_until = max(lane.cooldown_until, self.clock() + self.cooldown)
                         raise TransportDeferred('Amazon did not respond in time. Wait a few seconds before retrying.') from error
                     except Exception as error:
                         status = getattr(error, 'status', None) or getattr(getattr(error, 'response', None), 'status_code', None)

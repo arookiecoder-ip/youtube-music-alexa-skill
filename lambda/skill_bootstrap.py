@@ -27,7 +27,7 @@ def identity_params(kind, intent='', query=''):
         return {'include_resume': '1'}
     if kind == 'IntentRequest' and intent == 'PlaySongIntent' and isinstance(query, str):
         query = re.sub(r'^\s*silentmode\b[\s,]*', '', query, flags=re.IGNORECASE)
-        if re.fullmatch(r'\s*(?:the\s+)?app\s+selection\s*', query, flags=re.IGNORECASE):
+        if ' '.join(query.split()).casefold() in ('app selection', 'the app selection'):
             return {'include_play': '1'}
     return {}
 
@@ -135,6 +135,19 @@ def take(request_id, url, params):
 def clear():
     if hasattr(_pending, 'item'):
         del _pending.item
+
+
+def install_response(event, response):
+    """Install an already verified response for this exact envelope only.
+
+    The persistent service calls this only after authenticating the private
+    Lambda relay. It is never populated from an unsigned public request.
+    """
+    from concurrent.futures import Future
+    clear()
+    future = Future()
+    future.set_result(response)
+    _pending.item = (event['request']['requestId'], _api_url(), _params(event), future)
 
 
 def runtime_ready(milliseconds):

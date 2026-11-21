@@ -1,0 +1,3 @@
+-r ../lambda/requirements.txt
+Flask>=3.1,<4
+waitress>=3.0.2,<4

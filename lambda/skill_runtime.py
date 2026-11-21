@@ -1,10 +1,9 @@
-import logging, os, boto3, data, re, time
+import logging, os, data, re, time
 import ask_sdk_core.utils as ask_utils
 from ask_sdk_core.skill_builder import CustomSkillBuilder
 from ask_sdk_core.api_client import DefaultApiClient
 from ask_sdk_core.dispatch_components import AbstractRequestHandler, AbstractExceptionHandler, AbstractResponseInterceptor, AbstractRequestInterceptor
 from ask_sdk_core.handler_input import HandlerInput
-from ask_sdk_dynamodb.adapter import DynamoDbAdapter
 from ask_sdk_model import Response
 from mediaUtils import player
 from dataclasses import asdict
@@ -16,9 +15,17 @@ logger.setLevel(logging.INFO)
 
 ddb_region = os.environ.get('DYNAMODB_PERSISTENCE_REGION')
 ddb_table_name = os.environ.get('DYNAMODB_PERSISTENCE_TABLE_NAME')
-ddb_resource = boto3.resource('dynamodb', region_name=ddb_region)
-dynamodb_adapter = DynamoDbAdapter(table_name=ddb_table_name, create_table=False, dynamodb_resource=ddb_resource,
-                                  partition_keygen=persistence_key)
+if os.environ.get('MUSICBOX_PERSISTENCE_MODE', 'dynamodb') == 'relay':
+    from relay_store import RelayAdapter
+    dynamodb_adapter = RelayAdapter()
+elif os.environ.get('MUSICBOX_PERSISTENCE_MODE', 'dynamodb') == 'dynamodb':
+    import boto3
+    from ask_sdk_dynamodb.adapter import DynamoDbAdapter
+    ddb_resource = boto3.resource('dynamodb', region_name=ddb_region)
+    dynamodb_adapter = DynamoDbAdapter(table_name=ddb_table_name, create_table=False, dynamodb_resource=ddb_resource,
+                                      partition_keygen=persistence_key)
+else:
+    raise RuntimeError('Unsupported skill persistence mode')
 
 sb = CustomSkillBuilder(persistence_adapter = dynamodb_adapter, api_client=DefaultApiClient())
 

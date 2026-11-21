@@ -1,0 +1,12 @@
+.git
+**/.env
+**/.env.*
+.app-work
+.alexa-new
+attachments
+**/__pycache__
+**/*.pyc
+**/*.db
+**/*.db-*
+**/*cookies*.txt
+**/headers_auth.json

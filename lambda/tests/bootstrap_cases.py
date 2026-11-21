@@ -91,6 +91,8 @@ class BootstrapCases(unittest.TestCase):
     def test_action_selection_does_not_misinterpret_voice_search(self):
         self.assertEqual(bootstrap.identity_params('IntentRequest','PlaySongIntent','silentmode THE APP SELECTION'),{'include_play':'1'})
         self.assertEqual(bootstrap.identity_params('IntentRequest','PlaySongIntent','the app selection remix'),{})
+        self.assertEqual(bootstrap.identity_params('IntentRequest','PlaySongIntent',' '*100000+'app selection'),{'include_play':'1'})
+        self.assertEqual(bootstrap.identity_params('IntentRequest','PlaySongIntent','app'+' '*100000+'selection'+' '*100000+'x'),{})
         self.assertEqual(bootstrap.identity_params('IntentRequest','AMAZON.ResumeIntent'),{'include_resume':'1'})
         self.assertEqual(bootstrap.identity_params('IntentRequest','AMAZON.PauseIntent'),{})
 
