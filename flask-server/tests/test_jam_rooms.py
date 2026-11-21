@@ -242,6 +242,53 @@ class JamRoomsTests(unittest.TestCase):
         self.members.remove('room',member)
         with self.assertRaises(PermissionError):self.members.join('room',None,'Guest',previous=member)
 
+    def test_same_device_recovers_membership_without_cookie(self):
+        member = self.members.join('room', 'alice', 'Alice', 'phone')
+        self.rooms.presence('room', 'phone', member, 'Phone')
+        recovered = self.members.join('room', 'alice', 'Alice', 'phone')
+        self.assertEqual(recovered, member)
+        self.rooms.presence('room', 'phone', recovered, 'Phone')
+        self.members.leave(member)
+        self.assertEqual(self.members.join('room', 'alice', 'Alice', 'phone'), member)
+        self.assertIsNotNone(self.members.get(member, 'room', 'alice'))
+
+    def test_recovery_uses_original_member_even_with_duplicate_cookie(self):
+        member = self.members.join('room', 'alice', 'Alice', 'phone')
+        with self.database() as db:
+            db.execute("INSERT INTO jam_members(id,token,user_id,name,device_id,created_at) "
+                       "VALUES('duplicate','room','alice','Alice','phone',999999999999)")
+            db.commit()
+        self.assertEqual(self.members.join('room', 'alice', 'Alice', 'phone', 'duplicate'), member)
+
+    def test_presence_recovers_existing_duplicate_but_rejects_other_accounts(self):
+        original = self.members.join('room', 'alice', 'Alice', 'phone')
+        self.rooms.presence('room', 'phone', original, 'Phone')
+        with self.database() as db:
+            db.execute("INSERT INTO jam_members(id,token,user_id,name,device_id,created_at) "
+                       "VALUES('duplicate','room','alice','Alice','phone',999999999999)")
+            db.commit()
+        self.rooms.presence('room', 'phone', 'duplicate', 'Phone')
+        self.rooms.presence('room', 'phone', original, 'Phone')
+        other = self.members.join('room', 'bob', 'Bob', 'phone')
+        with self.assertRaises(PermissionError):
+            self.rooms.presence('room', 'phone', other, 'Phone')
+        self.members.leave('duplicate')
+        with self.assertRaises(PermissionError):
+            self.rooms.presence('room', 'phone', 'duplicate', 'Phone')
+
+    def test_concurrent_same_device_joins_share_membership(self):
+        with ThreadPoolExecutor(max_workers=6) as workers:
+            members = list(workers.map(lambda _: self.members.join('room', 'alice', 'Alice', 'phone'), range(12)))
+        self.assertEqual(len(set(members)), 1)
+
+    def test_recovery_never_reuses_another_identity_or_device(self):
+        member = self.members.join('room', 'alice', 'Alice', 'phone')
+        self.assertNotEqual(self.members.join('room', 'bob', 'Bob', 'phone'), member)
+        self.assertNotEqual(self.members.join('room', 'alice', 'Alice', 'tablet'), member)
+        self.members.remove('room', member)
+        with self.assertRaises(PermissionError):
+            self.members.join('room', 'alice', 'Alice', 'phone')
+
     def test_voluntary_leave_allows_explicit_rejoin(self):
         member=self.members.join('room','alice','Alice')
         self.members.leave(member)

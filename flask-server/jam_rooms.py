@@ -364,7 +364,19 @@ class JamRooms:
         with self.database() as db:
             existing = db.execute('SELECT member FROM jam_outputs WHERE token=? AND device=?', (token, device)).fetchone()
             if existing and existing['member'] != member:
-                raise PermissionError('This output belongs to another participant.')
+                # Older join retries could create multiple memberships for one
+                # account/device. Recover only that exact identity and device;
+                # knowing another participant's device ID grants no ownership.
+                same_device = db.execute('''SELECT 1 FROM jam_members old
+                    JOIN jam_members current ON current.token=old.token
+                    AND current.user_id=old.user_id AND current.device_id=old.device_id
+                    WHERE old.id=? AND current.id=? AND current.token=?
+                    AND current.device_id=? AND current.user_id IS NOT NULL
+                    AND current.user_id<>'' AND old.removed=0
+                    AND current.removed=0 AND current.left_room=0''',
+                    (existing['member'], member, token, device)).fetchone()
+                if not same_device:
+                    raise PermissionError('This output belongs to another participant.')
             details = details if isinstance(details, dict) else {}
             status = status if isinstance(status, dict) else {}
             safe_status = {key: status[key] for key in ('video_id','entry_id','target_id','seek_revision','ended','playing','confirmed','processing','position_ms','duration_ms','volume') if key in status}
