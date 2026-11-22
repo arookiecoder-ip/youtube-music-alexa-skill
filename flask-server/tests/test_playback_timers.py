@@ -91,6 +91,7 @@ class PlaybackTimersTests(unittest.TestCase):
         response = client.post('/timer', json={'minutes': 5})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json['deadline_ms'], 1300000)
+        self.assertEqual(response.json['remaining_ms'], 300000)
         self.assertEqual(client.post('/timer', json={'minutes': 0}).json['deadline_ms'], 0)
         self.assertEqual(client.get('/timer').json['deadline_ms'], 0)
 

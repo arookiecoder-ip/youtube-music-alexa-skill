@@ -14278,7 +14278,7 @@ def playback_sleep_timer():
             return error_response('Expected a JSON object.', 400)
         if body.get('minutes') == 0 and not isinstance(body.get('minutes'), bool):
             _playback_timers.cancel(identity)
-            return jsonify(ok=True, deadline_ms=0)
+            return jsonify(ok=True, deadline_ms=0, remaining_ms=0)
         room, member = _jam_access_token()
         if room:
             target = dict(room=room, member=member['id'] if member else None,
@@ -14299,6 +14299,7 @@ def playback_sleep_timer():
         timer = _playback_timers.get(identity)
     target = json.loads(timer['target']) if timer else {}
     return jsonify(deadline_ms=int(timer['deadline'] * 1000) if timer else 0,
+                   remaining_ms=max(0, int((timer['deadline'] - time.time()) * 1000)) if timer else 0,
                    playback_output='jam' if target.get('room') else target.get('playback_output', ''),
                    output_owner=target.get('output_owner', ''))
 
