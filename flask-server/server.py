@@ -10168,8 +10168,7 @@ def alexa_state_event():
             failed_current_intent = (event == 'failed' and occurrence_token
                 and len(parts) >= 3 and parts[2] == 'i' + format(int(intent * 1000000), 'x')
                 and parts[1] == body.get('video_id') == _now_playing.get('video_id')
-                and output['playback_output'] == 'alexa'
-                and _now_playing.get('playback_processing') and not _now_playing.get('playback_confirmed'))
+                and output['playback_output'] == 'alexa')
             if failed_current_intent or (failed_queued_intent and parts[1] == _now_playing.get('video_id')):
                 _now_playing['alexa_token'] = event_token
             elif (event == 'stopped' and occurrence_token and event_at is not None

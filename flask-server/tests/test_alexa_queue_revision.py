@@ -451,6 +451,21 @@ class AlexaQueueRevisionTests(NextTrackBase):
         self.assertFalse(server._now_playing['playback_processing'])
         self.assertFalse(server._now_playing['playback_confirmed'])
 
+    def test_current_failure_after_first_bytes_before_started_stops_progress(self):
+        video = 'a' * 11
+        self._set_queue([_meta(video)])
+        intent = server.time.time()
+        server._now_playing.update(alexa_intent_at=intent,
+            alexa_token='0|bbbbbbbbbbb|older', playing=True,
+            playback_confirmed=True, playback_processing=False)
+        with mock.patch.object(server, '_is_dead_or_flaky_video', return_value=False), mock.patch.object(server, '_delayed'):
+            self.client.post('/alexa/state_event/', query_string={'key':server.API_KEY}, json={
+                'event':'failed', 'video_id':video,
+                'token':'0|' + video + '|i' + format(int(intent*1000000), 'x'),
+                'error_type':'MEDIA_ERROR_INVALID_REQUEST'})
+        self.assertFalse(server._now_playing['playing'])
+        self.assertFalse(server._now_playing['playback_confirmed'])
+
     def test_failed_queued_occurrence_cannot_leave_promoted_track_playing(self):
         video = 'b' * 11
         self._set_queue([_meta('a' * 11), _meta(video)], current_index=1)
