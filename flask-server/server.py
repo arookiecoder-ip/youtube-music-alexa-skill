@@ -2142,16 +2142,17 @@ def _get_ytmusic_radio():
     identity = _current_identity()
     if _yt_auth_file(identity):
         return _get_ytmusic_home(identity)
-    if _server_session_enabled() and _has_server_session():
-        return _get_ytmusic_home(_SERVER_IDENTITY)
-    # Older installs may have only a Netscape download-cookie export.
+    # Use the same cookie export as audio downloading. It can be replaced
+    # independently of the server's saved browser headers.
     path = Supporting.get_ytdlp_cookies_file()
     if path:
         try:
             from radio_auth import cookie_headers
             return YTMusic(auth=cookie_headers(path))
-        except (OSError, ValueError):
+        except Exception:
             logger.warning('Recommendation download credentials are unavailable')
+    if _server_session_enabled() and _has_server_session():
+        return _get_ytmusic_home(_SERVER_IDENTITY)
     return _get_ytmusic()
 
 
