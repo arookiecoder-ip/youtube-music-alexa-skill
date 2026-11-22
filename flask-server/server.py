@@ -6364,6 +6364,15 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None,
             byte_range=request.headers.get('Range'), if_range=request.headers.get('If-Range'),
             **({'audio_track': audio_track} if audio_track else {}))
     except StreamError as error:
+        if confirm and allow_confirmation and error.code == 'track_unavailable':
+            with _np_lock:
+                output = _playback_output.snapshot()
+                if (output['playback_output'] == 'alexa'
+                        and output['output_token'] == echo_output_token
+                        and _now_playing.get('alexa_intent_at') == echo_intent
+                        and _now_playing.get('video_id') == video_id):
+                    _now_playing['_alexa_stream_failure'] = dict(video_id=video_id,
+                        intent_at=echo_intent, output_token=echo_output_token, code=error.code)
         # Upstream URLs/cookies never cross the API or enter the journal.
         response, status = error_response('Audio stream is temporarily unavailable.', error.status,
             code=error.code, retryable=error.status in (502, 503))
@@ -10229,11 +10238,17 @@ def alexa_state_event():
         with _np_lock:
             if not _valid_video_id(failed_id) or failed_id != _now_playing.get('video_id'):
                 return jsonify({'ok': True, 'ignored': 'stale or unidentified playback failure'})
+            stream_failure = _now_playing.get('_alexa_stream_failure') or {}
+            output = _playback_output.snapshot()
+            unavailable = (stream_failure.get('code') == 'track_unavailable'
+                and stream_failure.get('video_id') == failed_id
+                and stream_failure.get('intent_at') == _now_playing.get('alexa_intent_at')
+                and stream_failure.get('output_token') == output['output_token'])
             _reset_progress(_computed_position_ms())
             _now_playing.update(playing=False, playback_processing=False,
                 playback_confirmed=False,
-                playback_error={'type': str(body.get('error_type') or 'device_playback_error')[:100],
-                    'message': str(body.get('error_message') or 'Echo could not play the audio stream.')[:300]},
+                playback_error={'type': 'unavailable' if unavailable else str(body.get('error_type') or 'device_playback_error')[:100],
+                    'message': 'This song is unavailable.' if unavailable else str(body.get('error_message') or 'Echo could not play the audio stream.')[:300]},
                 updated_at=time.time())
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['failed_playback_revision'] = _now_playing['playback_revision']
@@ -10246,9 +10261,9 @@ def alexa_state_event():
                 if (_still_relevant_video(failed_id)
                         and _now_playing.get('playback_revision') == failed_revision
                         and _playback_output.snapshot()['playback_output'] == 'alexa'
-                        and _is_dead_or_flaky_video(failed_id)):
+                        and (unavailable or _is_dead_or_flaky_video(failed_id))):
                     # Service, auth and device failures must not consume the queue.
-                    _auto_advance_after_failure(serial, failed_id, str(body.get('error_type') or 'server_issue'))
+                    _auto_advance_after_failure(serial, failed_id, 'unavailable' if unavailable else str(body.get('error_type') or 'server_issue'))
             timer = _delayed(1.0, recover_failure)
         return jsonify({'ok': True})
     if event == 'stopped':

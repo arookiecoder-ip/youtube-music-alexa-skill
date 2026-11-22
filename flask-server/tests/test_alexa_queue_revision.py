@@ -451,6 +451,44 @@ class AlexaQueueRevisionTests(NextTrackBase):
         self.assertFalse(server._now_playing['playback_processing'])
         self.assertFalse(server._now_playing['playback_confirmed'])
 
+    def test_confirmed_unavailable_attempt_advances_but_other_failures_do_not(self):
+        video = 'a' * 11
+        for evidence_kind in ('current', 'old-intent', 'old-output', 'different-track', 'temporary', 'none'):
+            with self.subTest(evidence=evidence_kind):
+                self._set_queue([_meta(video), _meta('b'*11)])
+                evidence = dict(video_id=video, intent_at=10, output_token='owner1', code='track_unavailable')
+                if evidence_kind == 'old-intent': evidence['intent_at'] = 9
+                if evidence_kind == 'old-output': evidence['output_token'] = 'old-owner'
+                if evidence_kind == 'different-track': evidence['video_id'] = 'c'*11
+                if evidence_kind == 'temporary': evidence['code'] = 'resolve_timeout'
+                if evidence_kind == 'none': evidence = {}
+                server._now_playing.update(alexa_intent_at=10, playing=True,
+                    alexa_token='0|' + video + '|i989680', _alexa_stream_failure=evidence)
+                with mock.patch.object(server, '_is_dead_or_flaky_video', return_value=False), \
+                        mock.patch.object(server, '_delayed') as delayed, \
+                        mock.patch.object(server, '_auto_advance_after_failure') as advance:
+                    self.client.post('/alexa/state_event/', query_string={'key':server.API_KEY}, json={
+                        'event':'failed', 'video_id':video, 'token':'0|' + video + '|i989680',
+                        'error_type':'MEDIA_ERROR_INVALID_REQUEST'})
+                    delayed.call_args.args[1]()
+                    if evidence_kind == 'current':
+                        advance.assert_called_once_with(self.SERIAL, video, 'unavailable')
+                        self.assertEqual(server._now_playing['playback_error']['type'], 'unavailable')
+                    else: advance.assert_not_called()
+
+    def test_manual_selection_before_recovery_prevents_skip(self):
+        video = 'a' * 11
+        self._set_queue([_meta(video), _meta('b'*11)])
+        server._now_playing.update(alexa_intent_at=10, playing=True,
+            alexa_token='0|' + video + '|i989680',
+            _alexa_stream_failure=dict(video_id=video, intent_at=10, output_token='owner1', code='track_unavailable'))
+        with mock.patch.object(server, '_delayed') as delayed, mock.patch.object(server, '_auto_advance_after_failure') as advance:
+            self.client.post('/alexa/state_event/', query_string={'key':server.API_KEY}, json={
+                'event':'failed', 'video_id':video, 'token':'0|' + video + '|i989680'})
+            server._now_playing.update(video_id='b'*11, playback_revision=999)
+            delayed.call_args.args[1]()
+            advance.assert_not_called()
+
     def test_current_failure_after_first_bytes_before_started_stops_progress(self):
         video = 'a' * 11
         self._set_queue([_meta(video)])
