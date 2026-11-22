@@ -19,6 +19,7 @@ class RadioPersonalizationTests(unittest.TestCase):
         node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_get_ytmusic_radio')
         exec(compile(ast.Module(body=[node], type_ignores=[]), 'server.py', 'exec'), self.ns)
         self.select = self.ns['_get_ytmusic_radio']
+        self.ns['Supporting'].get_ytdlp_cookies_file.return_value = None
 
     def test_linked_listener_uses_only_own_session(self):
         self.select()
@@ -32,7 +33,7 @@ class RadioPersonalizationTests(unittest.TestCase):
 
     def test_download_export_fallback_does_not_change_account_client(self):
         self.ns['_yt_auth_file'].return_value = None
-        self.ns['_has_server_session'] = lambda: False
+        # A download-cookie upload must take priority over saved server headers.
         with tempfile.NamedTemporaryFile(mode='w') as stream:
             expiry = int(time.time()) + 3600
             stream.write(f'# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t{expiry}\tSAPISID\tfixture\n')
