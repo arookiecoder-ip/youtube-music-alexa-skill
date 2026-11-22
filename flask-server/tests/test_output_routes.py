@@ -9,6 +9,7 @@ import copy
 import time
 
 from test_app_queue import PhoneQueueTests, A, B, track
+from volume_dispatch import VolumeDispatch
 from playback_failover import PlaybackFailoverBudget
 from playback_contract import restore_snapshot
 from alexa_playback_errors import authentication_failure
@@ -26,7 +27,9 @@ class OutputRoutesTests(PhoneQueueTests):
         self.namespace['_dispatch_play_with_retry'] = self.seek_dispatch
         self.schedule_seek = Mock()
         self.namespace['_schedule_play_dispatch'] = self.schedule_seek
-        self.namespace.update(_alexa_volume_lock=threading.RLock(), _alexa_volume_grace={},
+        self.namespace.update(_alexa_volume_dispatch=VolumeDispatch(debounce=0, interval=0, wait=2),
+            _current_identity=lambda: 'test-account',
+            _alexa_volume_lock=threading.RLock(), _alexa_volume_grace={},
             _record_volume_state=Mock())
         self.arm = Mock()
         self.background = []
@@ -42,6 +45,13 @@ class OutputRoutesTests(PhoneQueueTests):
         self.command = Mock(side_effect=stopped)
         self.namespace['_HANDOFF_PAUSE_TIMEOUT'] = .3
         self.namespace['_known_alexa_auth_failure'] = Mock(return_value=None)
+        def background(target, args=(), name=None):
+            if name == 'alexa-volume':
+                worker = threading.Thread(target=target, args=args, daemon=True)
+                worker.start()
+                return worker
+            self.background.append((target, args, name))
+        self.namespace['_bg_thread'] = background
         self.namespace.update(alexa_remote=SimpleNamespace(remote=SimpleNamespace(command=self.command)),
                               _get_now_playing=lambda: dict(self.state),
                               _cancel_pending_dispatch=Mock(), _bump_playback_generation=Mock())
@@ -415,6 +425,31 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(self.namespace['_read_alexa_volume']('echo-one'), (40, None))
         self.assertEqual(values['echo-one'], 40)
 
+    def test_slow_volume_read_does_not_block_or_overwrite_new_command(self):
+        source = Path(__file__).resolve().parents[1] / 'server.py'
+        read_fn = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.FunctionDef) and n.name == '_read_alexa_volume')
+        exec(compile(ast.Module(body=[read_fn], type_ignores=[]), str(source), 'exec'), self.namespace)
+        started, release = threading.Event(), threading.Event()
+        values, replies = {'echo-one': 40}, []
+        self.namespace['_get_volume_state'] = lambda serial: values[serial]
+        self.namespace['_record_volume_state'] = lambda serial, value, notify=False: values.update({serial: value})
+        def read(serial):
+            started.set()
+            self.assertTrue(release.wait(2))
+            return 40, None
+        self.namespace['alexa_remote'].remote.volume = read
+        self.command.side_effect = None
+        self.command.return_value = None
+        reader = threading.Thread(target=lambda: replies.append(self.namespace['_read_alexa_volume']('echo-one')))
+        reader.start()
+        self.assertTrue(started.wait(1))
+        response = self.client.post('/alexa/command/', json={'serial': 'echo-one', 'action': 'volume', 'value': 70})
+        self.assertEqual(response.status_code, 200)
+        release.set()
+        reader.join(2)
+        self.assertEqual(replies, [(70, None)])
+        self.assertEqual(values['echo-one'], 70)
+
     def test_overlapping_volume_commands_finish_in_order(self):
         started, release = threading.Event(), threading.Event()
         sent = []
@@ -427,7 +462,7 @@ class OutputRoutesTests(PhoneQueueTests):
         def send(value):
             with self.app.test_client() as client:
                 reply = client.post('/alexa/command/', json={'serial':'echo-one', 'action':'volume', 'value':value})
-                self.assertEqual(reply.status_code, 200)
+                self.assertIn(reply.status_code, (200, 202))
         first = threading.Thread(target=send, args=(40,))
         second = threading.Thread(target=send, args=(70,))
         first.start()

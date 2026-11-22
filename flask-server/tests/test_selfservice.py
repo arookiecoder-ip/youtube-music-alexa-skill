@@ -385,6 +385,16 @@ class ForgotPasswordTests(SelfServiceTestBase):
         after = glob.glob(os.path.join(self.outbox, "*.eml"))
         self.assertEqual(len(after), before + 1, "only the real address gets a link")
 
+    def test_recovery_timing_metadata_does_not_reveal_account_existence(self):
+        self.register("player1")
+        self.verify_by_code()
+        for identifier in (self.user_row("player1")["email"], "missing@example.test"):
+            page = self.client.post("/forgot-password", data={"_csrf": self.form_csrf("/forgot-password"), "identifier": identifier})
+            self.assertEqual(page.status_code, 200)
+            text = page.get_data(as_text=True)
+            self.assertIn('data-code-ttl-seconds="', text)
+            self.assertIn('data-code-resend-seconds="60"', text)
+
     def test_the_reset_code_sets_a_password_and_keeps_other_sessions(self):
         self.register("player1")
         self.verify_by_code()

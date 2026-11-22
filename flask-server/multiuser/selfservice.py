@@ -884,6 +884,8 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     @bp.route("/forgot-password", methods=["GET", "POST"])
     def forgot_password():
         spec = dict(
+            code_ttl_seconds=config.email_code_minutes * 60,
+            code_resend_seconds=60,
             page_title="Reset your password",
             intro=(
                 "Enter your email address or username. If an account matches, we send a "

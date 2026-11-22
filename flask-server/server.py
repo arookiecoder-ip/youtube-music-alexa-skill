@@ -2713,6 +2713,7 @@ def _drop_alexa_state(identity):
             timer.cancel()
         except Exception:
             logger.exception('Could not cancel a queued Alexa sync for a deleted account')
+    _alexa_volume_dispatch.cancel_identity(identity)
     for registry in (_alexa_volume_grace_registry, _alexa_queue_decisions_registry,
                      _alexa_queue_sync_slot_registry, alexa_remote._remote_registry):
         registry.discard(identity)
@@ -3268,6 +3269,8 @@ _volume_by_serial = _PlayerStateView(_volume_registry)
 _alexa_volume_grace_registry = _PlayerStateRegistry(factory=lambda identity: {})
 _alexa_volume_grace = _PlayerStateView(_alexa_volume_grace_registry)
 _alexa_volume_lock = threading.RLock()
+from volume_dispatch import VolumeDispatch
+_alexa_volume_dispatch = VolumeDispatch()
 _playback_persistence = PlaybackPersistence(_playback_store, lambda: logger.error('Could not persist playback metadata'))
 # Warm the owner's entries at import: a snapshot that cannot be read is then a
 # boot-time log line rather than something that lands on whoever asks first.
@@ -3349,6 +3352,10 @@ def _np_snapshot(serial=None, retain_errors=False):
         volume = s.get('volume')
     playback_error = s.get('playback_error')
     output = _playback_output.snapshot()
+    if output['playback_output'] == 'alexa' and '_alexa_volume_dispatch' in globals():
+        pending_volume = _alexa_volume_dispatch.status((_current_identity(), serial or output.get('output_serial')))
+        if pending_volume and pending_volume['pending']:
+            volume = pending_volume['value']
     # Status reads are shared by independent controllers. Retain each event
     # briefly instead of allowing the first reader to consume everyone else's error.
     error_event = s.get('_playback_error_event')
@@ -3577,27 +3584,48 @@ def _record_volume_state(serial, volume, notify=False):
 
 
 def _command_alexa_volume(serial, value):
-    # Keep concurrent controllers ordered, and shield the shared UI from Amazon's
-    # briefly stale volume reads after a successful command.
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
         return error_response('invalid device volume', 400)
-    with _alexa_volume_lock:
-        error = alexa_remote.remote.command(serial, 'volume', value)
-        if error:
-            return error_response(error, 502)
-        _alexa_volume_grace[serial] = time.monotonic() + 4
-        _record_volume_state(serial, value, notify=True)
-    return jsonify(ok=True)
+    identity = _current_identity()
+    output = _playback_output.snapshot()
+    def valid():
+        latest = _playback_output.snapshot()
+        return all(latest.get(key) == output.get(key) for key in
+                   ('playback_output', 'output_owner', 'output_serial'))
+    def applied(volume):
+        with _alexa_volume_lock:
+            _alexa_volume_grace[serial] = time.monotonic() + 4
+            _record_volume_state(serial, volume, notify=True)
+    state = _alexa_volume_dispatch.submit((identity, serial), value,
+        send=lambda volume: alexa_remote.remote.command(serial, 'volume', volume),
+        spawn=lambda run: _bg_thread(run, name='alexa-volume'), applied=applied, valid=valid)
+    if state['error']:
+        return error_response(state['error'], 502)
+    return jsonify(ok=True, pending=state['pending']), 202 if state['pending'] else 200
 
 
 def _read_alexa_volume(serial):
+    pending = _alexa_volume_dispatch.status((_current_identity(), serial))
+    if pending and pending['pending']:
+        return pending['value'], None
     with _alexa_volume_lock:
         if time.monotonic() < _alexa_volume_grace.get(serial, 0):
             return _get_volume_state(serial), None
-        volume, error = alexa_remote.remote.volume(serial)
+    # Amazon reads can take seconds. Do not hold the command/cache lock during
+    # that network request, or publish its old result over a subsequent change.
+    before = (pending['revision'], pending['sent_at']) if pending else None
+    volume, error = alexa_remote.remote.volume(serial)
+    pending = _alexa_volume_dispatch.status((_current_identity(), serial))
+    if pending and (pending['revision'], pending['sent_at']) != before and not pending['pending']:
+        return _get_volume_state(serial), None
+    if pending and pending['pending']:
+        return pending['value'], None
+    with _alexa_volume_lock:
+        if time.monotonic() < _alexa_volume_grace.get(serial, 0):
+            return _get_volume_state(serial), None
         if not error:
             _record_volume_state(serial, volume, notify=True)
-        return volume, error
+    return volume, error
 
 
 def _refresh_volume(serial, notify=False):
