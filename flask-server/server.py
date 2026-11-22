@@ -4893,8 +4893,8 @@ class Supporting:
         except Exception:
             logger.exception("")
             return None
-        songs = (radio_results or {}).get('tracks', [])
-        if not songs:
+        songs = radio_results.get('tracks', []) if isinstance(radio_results, dict) else []
+        if not isinstance(songs, list) or not songs:
             return None
         # Use .get() throughout: a single malformed track (missing title/etc.)
         # must not KeyError and take down the whole radio (which would push
@@ -4902,16 +4902,20 @@ class Supporting:
         out = []
         seen = set()
         for track in songs:
+            if not isinstance(track, dict):
+                continue
             vid = track.get("videoId")
             if not _valid_video_id(vid) or vid in seen:
                 continue
             seen.add(vid)
+            thumbnails = track.get('thumbnail') or track.get('thumbnails')
+            thumbnail = thumbnails[-1] if isinstance(thumbnails, list) and thumbnails else thumbnails if isinstance(thumbnails, dict) else None
             out.append({
                 'title': track.get("title", ""),
                 'artist': _artist_credit_from_list(track.get("artists")),
                 'artists': _artist_entries_from_item(track),
                 'video_id': vid,
-                'thumbnail': track['thumbnail'][-1] if track.get('thumbnail') else None,
+                'thumbnail': thumbnail,
                 'duration_ms': Supporting.duration_ms(track),
             })
         return out or None

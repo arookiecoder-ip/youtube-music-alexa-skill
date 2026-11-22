@@ -53,7 +53,7 @@ class RadioPersonalizationTests(unittest.TestCase):
         def playlist(**kwargs):
             seed = kwargs['videoId']
             return {'tracks': [{'videoId': seed, 'title': seed}, {'videoId': seed},
-                               {'videoId': 'invalid'}, {'videoId': 'next' + seed[4:], 'title': 'Related'}]}
+                               {'videoId': 'invalid'}, None, {'videoId': 'next' + seed[4:], 'title': 'Related', 'thumbnail': {'url': 'https://example.test/art.jpg'}}]}
         client.get_watch_playlist.side_effect = playlist
         ns = dict(asyncio=asyncio, _get_ytmusic_radio=lambda: client, logger=Mock(),
                   _valid_video_id=lambda value: isinstance(value, str) and len(value) == 11,
