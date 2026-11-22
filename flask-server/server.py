@@ -2132,6 +2132,29 @@ def _get_ytmusic_home(identity=None):
         return inst
 
 
+
+def _get_ytmusic_radio():
+    """Seeded recommendations use the listener's session, then download auth.
+
+    The shared session is allowed only for this recommendation request; account
+    library, likes, history and home APIs continue to use their own credentials.
+    """
+    identity = _current_identity()
+    if _yt_auth_file(identity):
+        return _get_ytmusic_home(identity)
+    if _server_session_enabled() and _has_server_session():
+        return _get_ytmusic_home(_SERVER_IDENTITY)
+    # Older installs may have only a Netscape download-cookie export.
+    path = Supporting.get_ytdlp_cookies_file()
+    if path:
+        try:
+            from radio_auth import cookie_headers
+            return YTMusic(auth=cookie_headers(path))
+        except (OSError, ValueError):
+            logger.warning('Recommendation download credentials are unavailable')
+    return _get_ytmusic()
+
+
 def _ytmusic_client_is_authenticated(yt_home):
     """Verify browser auth using YouTube Music's active-account marker."""
     auth_type = str(getattr(yt_home, 'auth_type', 'UNAUTHORIZED'))
@@ -4862,30 +4885,37 @@ class Supporting:
         for lazy queue expansion once playback has already started."""
         if not _valid_video_id(video_id):
             return None
-        ytmusic = _get_ytmusic()
         try:
-            radio_results = await asyncio.to_thread(
-                ytmusic.get_watch_playlist, videoId=video_id, radio=True)
+            # Select the client inside the worker that uses its requests session.
+            def fetch():
+                return _get_ytmusic_radio().get_watch_playlist(videoId=video_id, radio=True, limit=50)
+            radio_results = await asyncio.to_thread(fetch)
         except Exception:
             logger.exception("")
             return None
-        songs = (radio_results or {}).get('tracks', [])
-        if not songs:
+        songs = radio_results.get('tracks', []) if isinstance(radio_results, dict) else []
+        if not isinstance(songs, list) or not songs:
             return None
         # Use .get() throughout: a single malformed track (missing title/etc.)
         # must not KeyError and take down the whole radio (which would push
         # recommendations onto the generic fallback).
         out = []
+        seen = set()
         for track in songs:
-            vid = track.get("videoId")
-            if not vid:
+            if not isinstance(track, dict):
                 continue
+            vid = track.get("videoId")
+            if not _valid_video_id(vid) or vid in seen:
+                continue
+            seen.add(vid)
+            thumbnails = track.get('thumbnail') or track.get('thumbnails')
+            thumbnail = thumbnails[-1] if isinstance(thumbnails, list) and thumbnails else thumbnails if isinstance(thumbnails, dict) else None
             out.append({
                 'title': track.get("title", ""),
                 'artist': _artist_credit_from_list(track.get("artists")),
                 'artists': _artist_entries_from_item(track),
                 'video_id': vid,
-                'thumbnail': track['thumbnail'][-1] if track.get('thumbnail') else None,
+                'thumbnail': thumbnail,
                 'duration_ms': Supporting.duration_ms(track),
             })
         return out or None
@@ -14229,6 +14259,107 @@ def _status_watchdog_loop():
 
 
 threading.Thread(target=_status_watchdog_loop, daemon=True, name='status-watchdog').start()
+
+
+
+from playback_timers import PlaybackTimers, same_output as _sleep_same_output
+_playback_timers = PlaybackTimers(get_db)
+
+
+@app.route('/api/app/sleep-timer/', methods=['GET', 'POST', 'DELETE'])
+def playback_sleep_timer():
+    identity = _current_identity()
+    if request.method == 'DELETE':
+        _playback_timers.cancel(identity)
+        return jsonify(ok=True)
+    if request.method == 'POST':
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return error_response('Expected a JSON object.', 400)
+        if body.get('minutes') == 0 and not isinstance(body.get('minutes'), bool):
+            _playback_timers.cancel(identity)
+            return jsonify(ok=True, deadline_ms=0, remaining_ms=0)
+        room, member = _jam_access_token()
+        if room:
+            target = dict(room=room, member=member['id'] if member else None,
+                          user_id=member['user_id'] if member else None)
+        else:
+            target = _playback_output.snapshot()
+            if target['handoff_pending']:
+                return error_response('Wait for the playback device to finish switching.', 409)
+            if target['playback_output'] == 'alexa' and not target.get('output_serial'):
+                return error_response('Choose an active Alexa device before setting a timer.', 409)
+            if target['playback_output'] == 'phone' and not target.get('output_owner'):
+                return error_response('Choose an active playback device before setting a timer.', 409)
+        try:
+            timer = _playback_timers.set(identity, body.get('minutes'), target)
+        except ValueError as exc:
+            return error_response(str(exc), 400)
+    else:
+        timer = _playback_timers.get(identity)
+    target = json.loads(timer['target']) if timer else {}
+    return jsonify(deadline_ms=int(timer['deadline'] * 1000) if timer else 0,
+                   remaining_ms=max(0, int((timer['deadline'] - time.time()) * 1000)) if timer else 0,
+                   playback_output='jam' if target.get('room') else target.get('playback_output', ''),
+                   output_owner=target.get('output_owner', ''))
+
+
+def _expire_playback_timer(timer):
+    identity = timer['identity']
+    current = _playback_timers.get(identity)
+    if not current or current['id'] != timer['id']:
+        return
+    # A long outage must not pause unrelated playback hours after the deadline.
+    if time.time() - timer['deadline'] > 300:
+        _playback_timers.cancel(identity, timer['id'])
+        return
+    target = timer['target']
+    identity_token = _PLAYER_IDENTITY.set(identity)
+    try:
+        if target.get('room'):
+            room, member = target['room'], target.get('member')
+            if _jam_token_valid(room) and (not member or _jam_members.get(member, room, target['user_id'])):
+                _jam_rooms.transact(room, 'pause', {}, member=member)
+                _jam_drive(room)
+        else:
+            output = _playback_output.snapshot()
+            if output.get('handoff_pending'):
+                raise RuntimeError('Sleep timer is waiting for an output handoff')
+            room = _get_now_playing().get('_jam_driver_room')
+            if room and _jam_token_valid(room):
+                # A personal timer cannot take over a newly joined shared room.
+                _playback_timers.cancel(identity, timer['id'])
+                return
+            if _sleep_same_output(target, output):
+                if output['playback_output'] == 'phone':
+                    # Receiver commands are bound to the current playback lease;
+                    # an offline/replaced phone cannot pause a later session.
+                    _mobile_devices.command(output['output_owner'], output['output_token'], 'pause', {}, timer['id'])
+                else:
+                    with app.test_request_context('/alexa/command/', method='POST', json={
+                            'serial': target['output_serial'], 'action': 'pause'}):
+                        response = app.make_response(alexa_command())
+                        if response.status_code >= 400:
+                            raise RuntimeError('Sleep timer could not confirm Alexa pause')
+        _playback_timers.cancel(identity, timer['id'])
+    finally:
+        _PLAYER_IDENTITY.reset(identity_token)
+
+
+def _playback_timer_loop():
+    while True:
+        time.sleep(1)
+        try:
+            for timer in _playback_timers.due():
+                try:
+                    _expire_playback_timer(timer)
+                except Exception:
+                    logger.warning('Sleep timer pause will retry', exc_info=True)
+        except Exception:
+            logger.warning('Sleep timer scheduler unavailable', exc_info=True)
+
+
+threading.Thread(target=_playback_timer_loop, daemon=True, name='playback-sleep-timers').start()
 
 
 @app.route("/", methods=["GET"])
