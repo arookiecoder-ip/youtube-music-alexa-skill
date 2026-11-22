@@ -5,6 +5,9 @@
 {% block brand_sub %}{{ page_title }}{% endblock %}
 
 {% block card %}
+{% if code_ttl_seconds is defined %}
+<span hidden data-code-ttl-seconds="{{ code_ttl_seconds }}" data-code-resend-seconds="{{ code_resend_seconds }}"></span>
+{% endif %}
 {# One generic single-field door form: it serves both "send a new verification
    code" and "forgot password", which differ only in copy and in which bucket
    they spend. #}

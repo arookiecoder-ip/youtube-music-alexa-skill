@@ -428,10 +428,83 @@ class AlexaQueueRevisionTests(NextTrackBase):
             self.assertFalse(server._promote_next_track('test'))
         self.assertEqual(server._now_playing['video_id'],'A')
 
+    def test_requested_prefetch_without_audio_bytes_cannot_start_progress(self):
+        self._set_queue([_meta('A'), _meta('B')])
+        server._now_playing.update(playing=False, playback_confirmed=False)
+        with mock.patch.object(server, '_prefetched_next', {'video_id':'B', 'at':server.time.time(), 'delivered':False}):
+            self.assertFalse(server._promote_next_track('failed prefetch'))
+        self.assertEqual(server._now_playing['video_id'], 'A')
+        self.assertFalse(server._now_playing['playing'])
+
+    def test_current_intent_failure_before_started_is_not_discarded_for_old_token(self):
+        video = 'a' * 11
+        self._set_queue([_meta(video)])
+        intent = server.time.time()
+        server._now_playing.update(video_id=video, alexa_intent_at=intent,
+            alexa_token='0|bbbbbbbbbbb|older', playing=True, playback_confirmed=False, playback_processing=True)
+        token = '0|' + video + '|i' + format(int(intent*1000000), 'x')
+        with mock.patch.object(server, '_is_dead_or_flaky_video', return_value=False), mock.patch.object(server, '_delayed'):
+            reply = self.client.post('/alexa/state_event/', query_string={'key':server.API_KEY}, json={
+                'event':'failed', 'video_id':video, 'token':token, 'error_type':'MEDIA_ERROR_INVALID_REQUEST'})
+        self.assertEqual(reply.status_code, 200)
+        self.assertFalse(server._now_playing['playing'])
+        self.assertFalse(server._now_playing['playback_processing'])
+        self.assertFalse(server._now_playing['playback_confirmed'])
+
+    def test_current_failure_after_first_bytes_before_started_stops_progress(self):
+        video = 'a' * 11
+        self._set_queue([_meta(video)])
+        intent = server.time.time()
+        server._now_playing.update(alexa_intent_at=intent,
+            alexa_token='0|bbbbbbbbbbb|older', playing=True,
+            playback_confirmed=True, playback_processing=False)
+        with mock.patch.object(server, '_is_dead_or_flaky_video', return_value=False), mock.patch.object(server, '_delayed'):
+            self.client.post('/alexa/state_event/', query_string={'key':server.API_KEY}, json={
+                'event':'failed', 'video_id':video,
+                'token':'0|' + video + '|i' + format(int(intent*1000000), 'x'),
+                'error_type':'MEDIA_ERROR_INVALID_REQUEST'})
+        self.assertFalse(server._now_playing['playing'])
+        self.assertFalse(server._now_playing['playback_confirmed'])
+
+    def test_failed_queued_occurrence_cannot_leave_promoted_track_playing(self):
+        video = 'b' * 11
+        self._set_queue([_meta('a' * 11), _meta(video)], current_index=1)
+        server._now_playing.update(alexa_intent_at=10, playing=True,
+            playback_processing=False, playback_confirmed=True,
+            _alexa_pending={'decision_id':'c'*24, 'next_video':video,
+                'intent_at':10, 'output_token':'owner1'})
+        with mock.patch.object(server, '_is_dead_or_flaky_video', return_value=False), mock.patch.object(server, '_delayed'):
+            reply = self.client.post('/alexa/state_event/', query_string={'key':server.API_KEY}, json={
+                'event':'failed', 'video_id':video, 'token':'1|' + video + '|q' + 'c'*24,
+                'error_type':'MEDIA_ERROR_INVALID_REQUEST'})
+        self.assertEqual(reply.status_code, 200)
+        self.assertFalse(server._now_playing['playing'])
+
+    def test_old_queued_failure_cannot_stop_new_intent_for_same_song(self):
+        video = 'b' * 11
+        self._set_queue([_meta(video)])
+        server._now_playing.update(alexa_intent_at=11, playing=True,
+            _alexa_pending={'decision_id':'c'*24, 'next_video':video,
+                'intent_at':10, 'output_token':'owner1'})
+        reply = self.client.post('/alexa/state_event/', query_string={'key':server.API_KEY}, json={
+            'event':'failed', 'video_id':video, 'token':'1|' + video + '|q' + 'c'*24})
+        self.assertEqual(reply.json['ignored'], 'stale playback token')
+        self.assertTrue(server._now_playing['playing'])
+
+    def test_failed_buffered_track_invalidates_prefetch_but_not_current_track(self):
+        decision = self.decision()
+        evidence = {'video_id':'B', 'at':server.time.time(), 'delivered':True}
+        with mock.patch.object(server, '_prefetched_next', evidence):
+            self.client.post('/alexa/state_event/', query_string={'key':server.API_KEY}, json={
+                'event':'failed', 'video_id':'B', 'token':'1|B|q' + decision['decision_id']})
+            self.assertIsNone(server._prefetched_next)
+        self.assertTrue(server._now_playing['playing'])
+        self.assertEqual(server._now_playing['video_id'], 'A')
+
     def test_valid_loop_prefetch_survives_a_dirty_queue(self):
         self._set_queue([_meta('A'),_meta('C')],current_index=1)
         server._now_playing.update(playing=False,queue_web_dirty=True,_alexa_pending={
             'current_video':'C','loop':True})
-        with mock.patch.object(server,'_prefetched_next',{'video_id':'A','at':server.time.time()}), mock.patch.object(server,'_notify_sse'), mock.patch.object(server,'_record_listen'), mock.patch.object(server.threading,'Thread'):
+        with mock.patch.object(server,'_prefetched_next',{'video_id':'A','at':server.time.time(),'delivered':True}), mock.patch.object(server,'_notify_sse'), mock.patch.object(server,'_record_listen'), mock.patch.object(server.threading,'Thread'):
             self.assertTrue(server._promote_next_track('test'))
         self.assertEqual(server._now_playing['video_id'],'A')
