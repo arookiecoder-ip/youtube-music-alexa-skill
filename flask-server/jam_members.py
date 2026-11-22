@@ -38,7 +38,7 @@ class JamMembers:
                     return row['id']
             if previous:
                 row = db.execute('SELECT * FROM jam_members WHERE id=? AND token=?', (previous, token)).fetchone()
-                if row and row['user_id'] == user_id:
+                if row and row['user_id'] == user_id and (not device_id or row['device_id'] == device_id):
                     if row['removed']:
                         raise PermissionError('The host removed you from this Jam.')
                     db.execute('UPDATE jam_members SET left_room=0 WHERE id=?', (previous,))

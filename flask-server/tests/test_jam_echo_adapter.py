@@ -101,6 +101,14 @@ class EchoAdapterTests(unittest.TestCase):
         self.ns['_jam_send_echo']('room',self.b,dict(action='volume',value=10))
         self.assertEqual(self.ns['alexa_remote'].remote.command.call_count,1)
 
+    def test_ending_host_jam_releases_echo_without_pause_or_late_restart(self):
+        self.players['user:alice'] = dict(_jam_keep_playing_room='room', playing=True)
+        self.ns['_jam_send_echo']('room', self.a, None)
+        self.ns['_jam_send_echo']('room', self.a, self.state)
+        self.ns['alexa_remote'].remote.command.assert_not_called()
+        self.assertEqual(self.sent, [])
+        self.assertTrue(self.players['user:alice']['playing'])
+
     def test_late_jam_cleanup_does_not_pause_a_new_personal_playback(self):
         self.players['user:alice']=dict(_jam_driver_room='another-room')
         self.ns['_jam_send_echo']('room',self.a,None)

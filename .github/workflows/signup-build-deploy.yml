@@ -44,7 +44,7 @@ jobs:
       - name: Jam membership recovery and ownership regressions
         env:
           PYTHONPATH: flask-server:flask-server/tests
-        run: python -m unittest test_jam_rooms test_jam_routes test_radio_personalization test_playback_timers test_volume_dispatch test_output_routes test_alexa_transport -q
+        run: python -m unittest test_jam_rooms test_jam_routes test_radio_personalization test_playback_timers test_volume_dispatch test_output_routes test_alexa_transport test_jam_session_races test_jam_echo test_jam_echo_adapter -q
       - name: Signup and account security regressions
         env:
           PYTHONPATH: flask-server:flask-server/tests

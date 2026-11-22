@@ -158,6 +158,9 @@ else:
     _session_cookie_secure = _cookie_insecure.strip().lower() not in {"1", "true", "yes", "on"}
 
 app.config.update(
+    # Read-only responses must not renew an old cookie snapshot over a concurrent
+    # Jam join/leave. SID validity already has an absolute 30-day deadline.
+    SESSION_REFRESH_EACH_REQUEST=False,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=_session_cookie_secure,
@@ -1263,7 +1266,7 @@ def _jam_prune_records():
     _jam_members.ensure()
     _jam_rooms.ensure()
     with get_db() as conn:
-        for table in ('jam_members', 'jam_rooms', 'jam_outputs', 'jam_commands'):
+        for table in ('jam_members', 'jam_rooms', 'jam_outputs', 'jam_commands', 'jam_device_commands', 'jam_echo_intents'):
             conn.execute(f'DELETE FROM {table} WHERE token NOT IN (SELECT token FROM jam_tokens)')
         conn.commit()
 
@@ -6144,7 +6147,7 @@ def proxy_stream():
         # short timeout), this is the only record of what actually plays next.
         global _prefetched_next
         with _np_lock:
-            _prefetched_next = {'video_id': video_id, 'at': time.time()}
+            _prefetched_next = {'video_id': video_id, 'at': time.time(), 'delivered': False}
         sys.stderr.write(f"[np] proxy prefetch ignored: current={current_video_id} requested={video_id}\n")
         sys.stderr.flush()
     elif video_id != current_video_id:
@@ -6389,8 +6392,13 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None,
                 if (cancellable and _generation_superseded(generation)
                         and _stream_superseded(video_id)):
                     return
-                if first:
+                if first and block:
                     first = False
+                    if confirm:
+                        with _np_lock:
+                            if (_prefetched_next and _prefetched_next.get('video_id') == video_id
+                                    and video_id != _now_playing.get('video_id')):
+                                _prefetched_next['delivered'] = True
                     if allow_confirmation:
                         _confirm_stream_delivery(video_id)
                     # A next-track Echo prefetch must not replace the song
@@ -6676,7 +6684,7 @@ def _promote_next_track(reason, position_ms=0):
                 return False
     next_item = None
     next_idx = -1
-    if pf and pf.get('video_id') and pf['video_id'] != cur_id \
+    if pf and pf.get('delivered') is True and pf.get('video_id') and pf['video_id'] != cur_id \
             and time.time() - pf.get('at', 0) < _PREFETCH_MAX_AGE:
         vid = pf['video_id']
         next_idx = next((i for i, it in enumerate(queue)
@@ -7873,6 +7881,8 @@ def jam_start():
             'device, then start the jam again.', 409)
     with _np_lock:
         seed = _np_snapshot(serial)
+    with _np_lock:
+        _now_playing.pop('_jam_keep_playing_room', None)
     token = _jam_open(_jam_identity_id())
     seed['queue'] = [row for row in seed.get('queue', []) if _valid_video_id(row.get('video_id'))]
     seed['queue_index'] = next((i for i, row in enumerate(seed['queue']) if row.get('video_id') == seed.get('video_id')), 0)
@@ -7895,8 +7905,16 @@ def jam_start():
 def jam_stop():
     """Revoke the jam. Every guest's next request 401s and their SSE stream
     closes on its next tick — revocation is effectively immediate."""
+    if _jam_membership():
+        return jsonify(error='Only the host can end this Jam.'), 403
+    token = _jam_active_token(_jam_identity_id())
+    if token:
+        with _np_lock:
+            _now_playing['_jam_keep_playing_room'] = token
+            if _now_playing.get('_jam_driver_room') == token:
+                _now_playing.pop('_jam_driver_room', None)
     _jam_close_all(_jam_identity_id())
-    return jsonify({'ok': True, 'active': False})
+    return jsonify({'ok': True, 'active': False, 'keep_playing': True})
 
 
 @app.route("/alexa/jam/status/", methods=["GET"])
@@ -8050,6 +8068,8 @@ def _jam_echo_snapshot(token, details, state):
 def _jam_send_echo(token, details, state):
     identity_token=_PLAYER_IDENTITY.set(details['identity'])
     try:
+        if _now_playing.get('_jam_keep_playing_room') == token:
+            return None
         serial=details['serial']
         if state:
             try:latest=_jam_rooms.transact(token)
@@ -8175,7 +8195,8 @@ def _jam_prepare(token, playback, expand=False):
 def jam_state():
     token, member = _jam_access_token()
     if not token:
-        return jsonify(active=False, revoked=bool(session.get('jam')))
+        return jsonify(active=False, revoked=bool(session.get('jam')),
+                       keep_playing=bool(_now_playing.get('_jam_keep_playing_room')))
     try:
         playback = _jam_rooms.transact(token, member=member['id'] if member else None)
         _jam_drive(token)
@@ -10060,6 +10081,7 @@ def _reconcile_buffered_alexa_start(token, offset_ms=0, event_at=None, second_pr
 
 @app.route("/alexa/state_event/", methods=["POST"])
 def alexa_state_event():
+    global _prefetched_next
     if getattr(request, 'headers', {}).get('X-Skill-SDK-Load-Ms'):
         _log_skill_runtime_timing()
     body = request.get_json(silent=True) or {}
@@ -10115,6 +10137,17 @@ def alexa_state_event():
         parts = event_token.split('|')
         occurrence_token = (len(parts) >= 3 and
                             re.fullmatch(r'(?:[0-9a-f]{24}|q[0-9a-f]{24}|i[0-9a-f]{1,20})', parts[2]))
+        pending = _now_playing.get('_alexa_pending') or {}
+        output = _playback_output.snapshot()
+        failed_queued_intent = (event == 'failed' and occurrence_token
+            and parts[2] == 'q' + str(pending.get('decision_id') or '')
+            and parts[1] == body.get('video_id') == pending.get('next_video')
+            and pending.get('intent_at') == _now_playing.get('alexa_intent_at')
+            and pending.get('output_token') == output.get('output_token')
+            and output['playback_output'] == 'alexa')
+        if failed_queued_intent and _prefetched_next and _prefetched_next.get('video_id') == parts[1]:
+            # Failed buffered audio cannot later serve as evidence of playback.
+            _prefetched_next = None
         stopped_ack = _now_playing.get('_alexa_stop_ack') or {}
         if (event == 'started' and event_token and event_token == tracked_token
                 and _playback_output.snapshot()['playback_output'] == 'phone'):
@@ -10132,7 +10165,14 @@ def alexa_state_event():
             output = _playback_output.snapshot()
             intent = float(_now_playing.get('alexa_intent_at') or 0)
             earliest = intent if '.' in str(body.get('event_timestamp', '')) else int(intent)
-            if (event == 'stopped' and occurrence_token and event_at is not None
+            failed_current_intent = (event == 'failed' and occurrence_token
+                and len(parts) >= 3 and parts[2] == 'i' + format(int(intent * 1000000), 'x')
+                and parts[1] == body.get('video_id') == _now_playing.get('video_id')
+                and output['playback_output'] == 'alexa'
+                and _now_playing.get('playback_processing') and not _now_playing.get('playback_confirmed'))
+            if failed_current_intent or (failed_queued_intent and parts[1] == _now_playing.get('video_id')):
+                _now_playing['alexa_token'] = event_token
+            elif (event == 'stopped' and occurrence_token and event_at is not None
                     and event_at >= earliest and parts[1] == body.get('video_id')
                     and body.get('video_id') == _now_playing.get('video_id')
                     and not _now_playing.get('playing') and _now_playing.get('playback_processing')

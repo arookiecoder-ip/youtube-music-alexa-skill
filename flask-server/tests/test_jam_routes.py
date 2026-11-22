@@ -34,7 +34,7 @@ class JamRouteTests(unittest.TestCase):
         layer=SimpleNamespace(alexa_identity=SimpleNamespace(skill_namespace=lambda _:''),
             alexa_access=SimpleNamespace(enabled=lambda _:True))
         self.ns=dict(hashlib=hashlib,hmac=hmac,_jam_prepare=lambda *args,**kwargs:None,_jam_drive=lambda token:None,json=json,app=app,Response=Response,request=request,session=session,jsonify=jsonify,render_template=render_template,
-            time=time,secrets=secrets,get_db=self.database,_jam_members=self.members,_jam_rooms=self.rooms,JamConflict=JamConflict,
+            _now_playing={},_np_lock=threading.RLock(),time=time,secrets=secrets,get_db=self.database,_jam_members=self.members,_jam_rooms=self.rooms,JamConflict=JamConflict,
             _jam_cache=lambda:cache,JAM_MAX_AGE=86400,
             _mu_web_identity=lambda:dict(id=request.headers['Test-User'],username=request.headers['Test-User'],role='user') if request.headers.get('Test-User') else None,
             _logged_in=lambda:bool(request.headers.get('Test-User')),
@@ -56,7 +56,7 @@ class JamRouteTests(unittest.TestCase):
         names={'_jam_membership','_jam_identity_id','_jam_token_valid','_jam_purge_token','_jam_active_token',
             '_jam_guest','_jam_prune_records','_jam_request_allowed','_bind_player_identity','require_api_key',
             'jam_join','_jam_access_token','jam_state','jam_presence','jam_control','jam_remove_member',
-            'jam_guest_leave','android_asset_links','jam_room_page','jam_audio','_rate_limit_group','_check_rate_limit','_jam_detach_account_output'}
+            'jam_guest_leave','jam_stop','_jam_close_all','android_asset_links','jam_room_page','jam_audio','_rate_limit_group','_check_rate_limit','_jam_detach_account_output'}
         tree=ast.parse((root/'server.py').read_text())
         nodes=[]
         for node in tree.body:
@@ -67,7 +67,7 @@ class JamRouteTests(unittest.TestCase):
         app.before_request(self.ns['_bind_player_identity'])
         app.before_request(self.ns['require_api_key'])
         app.before_request(self.ns['_check_rate_limit'])
-        routes=[('/j/<token>','jam_join',['GET','POST']),('/api/jam/state/','jam_state',['GET']),
+        routes=[('/alexa/jam/stop/','jam_stop',['POST']),('/j/<token>','jam_join',['GET','POST']),('/api/jam/state/','jam_state',['GET']),
             ('/api/jam/presence/','jam_presence',['POST']),('/api/jam/control/','jam_control',['POST']),
             ('/alexa/jam/remove/','jam_remove_member',['POST']),('/api/jam/leave/','jam_guest_leave',['POST']),
             ('/api/jam/audio/<video_id>','jam_audio',['GET','HEAD']),('/.well-known/assetlinks.json','android_asset_links',['GET']),('/jam-room/','jam_room_page',['GET'])]
@@ -101,6 +101,27 @@ class JamRouteTests(unittest.TestCase):
             response = client.post('/api/jam/presence/', json={'device_id': 'alice-phone', 'name': 'Phone'}, headers={'Test-User': 'alice'})
             self.assertEqual(response.status_code, 200)
         self.assertEqual(len(self.members.list('room')), 1)
+
+    def test_host_ending_room_preserves_host_playback_and_revokes_participant(self):
+        self.join(self.alice, 'alice')
+        self.ns['_now_playing'].update(playing=True, video_id='aaaaaaaaaaa', _jam_driver_room='room')
+        reply = self.host.post('/alexa/jam/stop/', json={}, headers={'Test-User':'host'})
+        self.assertEqual(reply.status_code, 200)
+        self.assertTrue(reply.json['keep_playing'])
+        self.assertTrue(self.ns['_now_playing']['playing'])
+        self.assertNotIn('_jam_driver_room', self.ns['_now_playing'])
+        self.assertEqual(self.ns['_now_playing']['_jam_keep_playing_room'], 'room')
+        self.assertFalse(self.alice.get('/api/jam/state/', headers={'Test-User':'alice'}).json['active'])
+
+    def test_participant_cannot_end_room_but_can_leave_without_pausing_host(self):
+        self.join(self.alice, 'alice')
+        self.ns['_now_playing'].update(playing=True)
+        denied = self.alice.post('/alexa/jam/stop/', json={}, headers={'Test-User':'alice'})
+        self.assertEqual(denied.status_code, 403)
+        left = self.alice.post('/api/jam/leave/', json={}, headers={'Test-User':'alice'})
+        self.assertEqual(left.status_code, 200)
+        self.assertTrue(self.ns['_now_playing']['playing'])
+        self.assertTrue(self.host.get('/api/jam/state/', headers={'Test-User':'host'}).json['active'])
 
     def test_invitation_get_shows_consent_without_joining(self):
         response=self.alice.get('/j/room',headers={'Test-User':'alice'})

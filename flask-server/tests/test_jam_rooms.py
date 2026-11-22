@@ -242,6 +242,12 @@ class JamRoomsTests(unittest.TestCase):
         self.members.remove('room',member)
         with self.assertRaises(PermissionError):self.members.join('room',None,'Guest',previous=member)
 
+    def test_cookie_from_another_device_does_not_reuse_its_output_membership(self):
+        phone = self.members.join('room', 'alice', 'Alice', 'phone')
+        tablet = self.members.join('room', 'alice', 'Alice', 'tablet', previous=phone)
+        self.assertNotEqual(phone, tablet)
+        self.assertEqual(self.members.get(tablet, 'room', 'alice')['device_id'], 'tablet')
+
     def test_same_device_recovers_membership_without_cookie(self):
         member = self.members.join('room', 'alice', 'Alice', 'phone')
         self.rooms.presence('room', 'phone', member, 'Phone')

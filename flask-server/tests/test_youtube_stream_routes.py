@@ -23,6 +23,28 @@ class StreamRoutes(unittest.TestCase):
             patch=mock.patch.object(server._youtube_stream_for(),name,value);patch.start();self.addCleanup(patch.stop)
         self.addCleanup(self.relay.close)
 
+    def test_next_prefetch_is_evidence_only_after_audio_bytes_are_delivered(self):
+        evidence = {'video_id':VID, 'delivered':False}
+        with server.app.test_request_context('/proxy/?video_id='+VID), \
+                mock.patch.dict(server._now_playing, {'video_id':'a'*11, 'alexa_intent_at':10}), \
+                mock.patch.object(server, '_prefetched_next', evidence), \
+                mock.patch.object(server, '_confirm_stream_delivery'):
+            response = server._serve_youtube_stream(VID, confirm=True)
+            self.assertFalse(evidence['delivered'])
+            self.assertTrue(b''.join(response.response))
+            self.assertTrue(evidence['delivered'])
+            response.close()
+
+    def test_failed_prefetch_never_becomes_playback_evidence(self):
+        evidence = {'video_id':VID, 'delivered':False}
+        server._youtube_stream_for().open.side_effect = StreamError('track_unavailable',404)
+        with server.app.test_request_context('/proxy/?video_id='+VID), \
+                mock.patch.object(server, '_prefetched_next', evidence):
+            response = server._serve_youtube_stream(VID, confirm=True)
+            self.assertEqual(response.status_code,404)
+            self.assertFalse(evidence['delivered'])
+            response.close()
+
     def test_old_signed_stream_cannot_confirm_a_new_same_song_seek(self):
         from types import SimpleNamespace
         for old in (True,False):
