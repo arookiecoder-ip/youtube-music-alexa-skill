@@ -14318,6 +14318,13 @@ def _expire_playback_timer(timer):
                 _jam_drive(room)
         else:
             output = _playback_output.snapshot()
+            if output.get('handoff_pending'):
+                raise RuntimeError('Sleep timer is waiting for an output handoff')
+            room = _get_now_playing().get('_jam_driver_room')
+            if room and _jam_token_valid(room):
+                # A personal timer cannot take over a newly joined shared room.
+                _playback_timers.cancel(identity, timer['id'])
+                return
             if _sleep_same_output(target, output):
                 if output['playback_output'] == 'phone':
                     # Receiver commands are bound to the current playback lease;

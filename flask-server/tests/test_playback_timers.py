@@ -72,7 +72,7 @@ class PlaybackTimersTests(unittest.TestCase):
                   _playback_timers=self.timers, _playback_output=Mock(), _jam_access_token=lambda: (None, None),
                   error_response=lambda message, status: (jsonify(error=message), status),
                   app=app, _sleep_same_output=same_output, time=Mock(),
-                  _mobile_devices=Mock(), alexa_command=Mock(return_value=({}, 200)),
+                  _mobile_devices=Mock(), _get_now_playing=lambda: {}, alexa_command=Mock(return_value=({}, 200)),
                   _jam_token_valid=Mock(return_value=True), _jam_members=Mock(), _jam_rooms=Mock(), _jam_drive=Mock())
         ns['_playback_output'].snapshot.return_value = self.target
         ns['time'].time.return_value = self.now
