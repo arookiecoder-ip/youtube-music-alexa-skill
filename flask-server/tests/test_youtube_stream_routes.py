@@ -45,6 +45,21 @@ class StreamRoutes(unittest.TestCase):
             self.assertFalse(evidence['delivered'])
             response.close()
 
+    def test_unavailable_evidence_is_scoped_to_current_echo_attempt(self):
+        for code, confirm, current in [('track_unavailable',True,VID),
+                ('resolve_timeout',True,VID), ('track_unavailable',False,VID),
+                ('track_unavailable',True,'a'*11)]:
+            server._youtube_stream_for().open.side_effect = StreamError(code,404 if code == 'track_unavailable' else 503)
+            with server.app.test_request_context('/proxy/?video_id='+VID), \
+                    mock.patch.dict(server._now_playing, {'video_id':current,'alexa_intent_at':10},clear=True), \
+                    mock.patch.object(server._playback_output, 'snapshot', return_value={'playback_output':'alexa','output_token':'owner1'}):
+                self.assertNotIn('_alexa_stream_failure', server._now_playing)
+                response = server._serve_youtube_stream(VID,confirm=confirm)
+                output=server._playback_output.snapshot()
+                expected=code=='track_unavailable' and confirm and current==VID and output['playback_output']=='alexa'
+                self.assertEqual('_alexa_stream_failure' in server._now_playing, expected)
+                response.close()
+
     def test_old_signed_stream_cannot_confirm_a_new_same_song_seek(self):
         from types import SimpleNamespace
         for old in (True,False):
