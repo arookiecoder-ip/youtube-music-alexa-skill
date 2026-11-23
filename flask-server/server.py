@@ -13581,6 +13581,14 @@ def api_track_listen(video_id):
         song = yt.get_song(video_id)
         if not song:
             return error_response('Song unavailable.', 502)
+        tracking = song.get('playbackTracking')
+        playback = tracking.get('videostatsPlaybackUrl') if isinstance(tracking, dict) else None
+        if not isinstance(playback, dict) or not playback.get('baseUrl'):
+            # Google can return playable metadata without history tracking.
+            # Keep the history write pending; this is not a backend outage or
+            # confirmation that Google accepted the listen.
+            return error_response('YouTube history sync is pending. Playback can continue.',
+                                  409, code='history_sync_pending', retryable=True)
         result = yt.add_history_item(song)
         if getattr(result, 'status_code', 0) != 204:
             return error_response('Google rejected history sync.', 502)

@@ -16,6 +16,27 @@ class RouteContractTests(SecondFactorDoorTestBase):
         response=self.client.post('/login/',json={'username':self.user['username'],'password':PLAYER_PASSWORD})
         self.assertEqual(response.status_code,200)
 
+    def test_history_missing_tracking_remains_pending_without_server_error(self):
+        self.login_player()
+        provider = mock.Mock(auth_type='BROWSER')
+        with mock.patch.object(self.server, '_get_ytmusic_home', return_value=provider):
+            for song in ({'videoDetails': {'videoId': 'AAAAAAAAAAA'}},
+                         {'playbackTracking': None},
+                         {'playbackTracking': {'videostatsPlaybackUrl': {}}}):
+                provider.get_song.return_value = song
+                response = self.client.post('/api/track/AAAAAAAAAAA/listen', json={})
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(response.json['error']['code'], 'history_sync_pending')
+            provider.add_history_item.assert_not_called()
+            song = {'playbackTracking': {'videostatsPlaybackUrl': {'baseUrl': 'https://music.youtube.com/tracking'}}}
+            provider.get_song.return_value = song
+            provider.add_history_item.return_value.status_code = 204
+            response = self.client.post('/api/track/AAAAAAAAAAA/listen', json={})
+            self.assertEqual(response.status_code, 200)
+            provider.add_history_item.assert_called_once_with(song)
+            provider.add_history_item.return_value.status_code = 500
+            self.assertEqual(self.client.post('/api/track/AAAAAAAAAAA/listen', json={}).status_code, 502)
+
     def test_public_information_routes_render_without_login(self):
         for path, heading in [('/privacy_policy/', 'Privacy'), ('/terms_of_use/', 'Terms of use')]:
             response = self.client.get(path)
