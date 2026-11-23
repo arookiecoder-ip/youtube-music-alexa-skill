@@ -977,7 +977,7 @@ _SESSION_PATHS = ('/api/jam/session', '/audio', '/get_radio', '/status', '/api/s
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/alexa/jam/remove', '/api/home', '/api/library',
-                  '/api/subscribed_artists', '/api/app/output', '/api/app/devices', '/api/app/events/snapshot', '/api/app/audio-token',
+                  '/api/subscribed_artists', '/api/app/output', '/api/app/devices', '/api/app/events/snapshot', '/api/app/audio-token', '/api/app/sleep-timer',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
                   '/api/youtube/download-cookies', '/api/youtube/download-cookies/status',
 '/alexa/amazon_signout', '/alexa/form_login', '/alexa/form_login/step',

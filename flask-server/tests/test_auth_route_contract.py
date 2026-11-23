@@ -1,4 +1,5 @@
 """Real authentication middleware: role, tenant and revocation access matrix."""
+import json
 import os
 import sys
 from pathlib import Path
@@ -21,6 +22,33 @@ class RouteContractTests(SecondFactorDoorTestBase):
             self.assertEqual(response.status_code, 200)
             self.assertIn(heading.encode(), response.data)
             self.assertIn(b'width=device-width', response.data)
+
+    def test_sleep_timer_accepts_session_for_alexa_and_requires_authentication(self):
+        path = '/api/app/sleep-timer/'
+        timers = mock.Mock()
+        timers.get.return_value = None
+        target = dict(playback_output='alexa', output_serial='test-echo',
+                      output_owner='', handoff_pending=False)
+        with mock.patch.object(self.server, '_playback_timers', timers), \
+                mock.patch.object(self.server, '_playback_output', mock.Mock(snapshot=mock.Mock(return_value=target))):
+            for method in ('get', 'post', 'delete'):
+                response = getattr(self.client, method)(path, json={'minutes': 5})
+                self.assertEqual(response.status_code, 401)
+            timers.set.assert_not_called()
+            timers.cancel.assert_not_called()
+            self.login_player()
+            self.assertEqual(self.client.get(path).status_code, 200)
+            identity = 'user:' + self.user['id']
+            timers.get.assert_called_with(identity)
+            timers.set.return_value = {'deadline': 2000000000, 'target': json.dumps(target)}
+            response = self.client.post(path, json={'minutes': 5})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json['playback_output'], 'alexa')
+            timers.set.assert_called_once_with(identity, 5, target)
+            self.assertEqual(self.client.delete(path, json={}).status_code, 200)
+            timers.cancel.assert_called_once_with(identity)
+            # The cookie alone must not permit cross-site form submissions.
+            self.assertEqual(self.client.post(path, data={'minutes': 5}).status_code, 401)
 
     def test_cookie_authenticated_get_cannot_change_liked_songs(self):
         self.login_player()
