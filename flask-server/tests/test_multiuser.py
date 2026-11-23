@@ -611,6 +611,35 @@ class EmailFlowTests(MultiUserTestBase):
 
 
 class ServiceTests(MultiUserTestBase):
+    def test_active_session_renews_idle_timeout_but_keeps_absolute_limit(self):
+        accounts = self.layer.accounts
+        owner = accounts.get_user_by_username("owner")
+        start = time.time()
+        idle = accounts.config.session_hours * 3600
+        absolute = accounts.config.session_absolute_days * 86400
+        with mock.patch("multiuser.accounts._now", return_value=start):
+            sid = accounts.create_session(owner)
+        # Keep using the session across its original expiry.
+        elapsed = idle / 2
+        while elapsed < absolute:
+            with mock.patch("multiuser.accounts._now", return_value=start + elapsed):
+                entry, user = accounts.validate_session(sid)
+            self.assertEqual(user["id"], owner["id"])
+            self.assertAlmostEqual(entry["expires_at"],
+                                   min(start + elapsed + idle, start + absolute))
+            elapsed += idle / 2
+        with mock.patch("multiuser.accounts._now", return_value=start + absolute + 1):
+            self.assertEqual(accounts.validate_session(sid), (None, None))
+
+    def test_idle_session_cannot_be_revived(self):
+        accounts = self.layer.accounts
+        owner = accounts.get_user_by_username("owner")
+        start = time.time()
+        with mock.patch("multiuser.accounts._now", return_value=start):
+            sid = accounts.create_session(owner)
+        with mock.patch("multiuser.accounts._now", return_value=start + accounts.config.session_hours * 3600 + 1):
+            self.assertEqual(accounts.validate_session(sid), (None, None))
+
     def test_password_hashing_and_validation(self):
         digest = hash_password("Valid!Passw0rd1")
         self.assertTrue(verify_password(digest, "Valid!Passw0rd1"))
