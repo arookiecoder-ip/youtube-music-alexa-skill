@@ -61,8 +61,10 @@ SID; the database stores `sha256(raw)`.
 | `ip`, `user_agent` | Truncated client metadata |
 | `revoked_at` | `0` = live |
 
-Expiry is the smaller of `MULTIUSER_SESSION_HOURS` (sliding, default 12h) and
-`MULTIUSER_SESSION_ABSOLUTE_DAYS` (default 7d). Expired/revoked rows are purged
+Expiry is the smaller of `MULTIUSER_SESSION_HOURS` (sliding, default 720h / 30 days) and
+`MULTIUSER_SESSION_ABSOLUTE_DAYS` (default 90 days). Existing deployments must
+update explicit environment overrides to use these defaults. Already expired
+or revoked sessions remain invalid and require a new login. Expired/revoked rows are purged
 during initialization and on session creation.
 
 ## `user_email_tokens`

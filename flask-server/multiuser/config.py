@@ -35,8 +35,8 @@ class MultiUserConfig:
     admin_password: str = ""
     admin_email: str = ""
     encryption_key: str = ""
-    session_hours: int = 12
-    session_absolute_days: int = 7
+    session_hours: int = 720
+    session_absolute_days: int = 90
     login_max_attempts: int = 5
     login_window_seconds: int = 900
     request_max_per_minute: int = 180
@@ -89,8 +89,8 @@ class MultiUserConfig:
                 or os.environ.get("ADMIN_ENCRYPTION_KEY")
                 or ""
             ).strip(),
-            session_hours=_env_int("MULTIUSER_SESSION_HOURS", 12),
-            session_absolute_days=_env_int("MULTIUSER_SESSION_ABSOLUTE_DAYS", 7),
+            session_hours=_env_int("MULTIUSER_SESSION_HOURS", 720),
+            session_absolute_days=_env_int("MULTIUSER_SESSION_ABSOLUTE_DAYS", 90),
             login_max_attempts=_env_int("MULTIUSER_LOGIN_MAX_ATTEMPTS", 5),
             login_window_seconds=_env_int("MULTIUSER_LOGIN_WINDOW_SECONDS", 900),
             request_max_per_minute=_env_int("MULTIUSER_REQUEST_MAX_PER_MINUTE", 180),

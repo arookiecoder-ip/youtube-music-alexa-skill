@@ -611,6 +611,29 @@ class EmailFlowTests(MultiUserTestBase):
 
 
 class ServiceTests(MultiUserTestBase):
+    def test_session_defaults_and_explicit_shorter_policy(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            defaults = MultiUserConfig.from_env()
+        self.assertEqual((defaults.session_hours, defaults.session_absolute_days), (720, 90))
+        with mock.patch.dict(os.environ, {'MULTIUSER_SESSION_HOURS': '12',
+                                          'MULTIUSER_SESSION_ABSOLUTE_DAYS': '7'}):
+            configured = MultiUserConfig.from_env()
+        self.assertEqual((configured.session_hours, configured.session_absolute_days), (12, 7))
+
+    def test_persistent_session_survives_overnight_and_revocation_still_works(self):
+        accounts = self.layer.accounts
+        accounts.config.session_hours = 720
+        accounts.config.session_absolute_days = 90
+        owner = accounts.get_user_by_username('owner')
+        start = time.time()
+        with mock.patch('multiuser.accounts._now', return_value=start):
+            sid = accounts.create_session(owner)
+        with mock.patch('multiuser.accounts._now', return_value=start + 24 * 3600):
+            entry, user = accounts.validate_session(sid)
+            self.assertEqual(user['id'], owner['id'])
+            accounts.revoke_session(entry['sid_hash'])
+            self.assertEqual(accounts.validate_session(sid), (None, None))
+
     def test_active_session_renews_idle_timeout_but_keeps_absolute_limit(self):
         accounts = self.layer.accounts
         owner = accounts.get_user_by_username("owner")
