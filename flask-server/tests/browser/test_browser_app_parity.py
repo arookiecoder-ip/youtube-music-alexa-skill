@@ -55,111 +55,33 @@ def app_origin():
 
 
 @pytest.mark.parametrize('width',[390,820,1440])
-def test_app_navigation_settings_timer_lyrics_and_download(app_origin,width,tmp_path):
+def test_features_preserve_browser_layout(app_origin,width):
     origin,state=app_origin
     with sync_playwright() as driver:
         browser=driver.chromium.launch()
-        context=browser.new_context(viewport={'width':width,'height':900},accept_downloads=True)
-        page=context.new_page();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
-        def screenshot(name):
-            directory=Path(os.environ.get('MUSICBOX_PARITY_SCREENSHOTS',str(tmp_path)))
-            directory.mkdir(parents=True,exist_ok=True)
-            page.screenshot(path=str(directory/f'{name}-{width}.png'),full_page=name in ('search','library','settings'),animations='disabled')
+        page=browser.new_page(viewport={'width':width,'height':900},accept_downloads=True)
+        errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
         page.goto(origin+'/home')
-        page.wait_for_function("!!window.browserPreferences && typeof window.navigateTo === 'function'")
-        page.evaluate("document.body.classList.remove('preload')")
-        if width<900:
-            expect(page.get_by_role('navigation',name='Main navigation')).to_be_visible()
-            page.locator('.app-dock [data-app-route="#search"]').click()
-        else:page.evaluate("navigateTo('#search')")
-        expect(page.get_by_role('heading',name='Search',exact=True)).to_be_visible()
-        expect(page.get_by_role('link',name='New releases & charts',exact=False)).to_be_visible()
-        screenshot('search')
-        page.evaluate("navigateTo('#library')")
-        expect(page.locator('.library-card-album')).to_be_visible()
-        screenshot('library')
-        page.locator('[data-library-filter="albums"]').click()
-        expect(page.locator('.library-card:not(.library-card-album)')).not_to_be_visible()
-        page.get_by_role('searchbox',name='Search your library').fill('Saved')
-        expect(page.locator('.library-card-album')).to_be_visible()
-        page.get_by_role('button',name='Toggle library layout').click()
-        assert not page.locator('#library-page').evaluate("el=>el.classList.contains('app-library-list')")
-        page.locator('.library-card-album').click()
-        expect(page).to_have_url(origin+'/album?browse=MPREfixture')
-        page.evaluate("navigateTo('#settings')")
-        expect(page.get_by_role('heading',name='Settings',exact=True)).to_be_visible()
-        page.locator('[data-pref="preload"]').uncheck()
-        assert page.evaluate('browserPreferences.preload') is False
-        page.reload();page.wait_for_function('window.browserPreferences')
-        expect(page.locator('[data-pref="preload"]')).not_to_be_checked()
-        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-        if width>=900:
-            page.wait_for_function("document.querySelector('#browser-settings-page').getBoundingClientRect().left >= document.querySelector('.sidebar').getBoundingClientRect().right")
-        expect(page.locator('[data-pref="theme"]')).to_have_value('dark')
-        assert page.locator('[data-pref="theme"]').bounding_box()['width']>=100
-        screenshot('settings')
-        if width>=900:
-            assert page.get_by_role('heading',name='Settings',exact=True).bounding_box()['x']>=page.locator('.sidebar').bounding_box()['width']
+        page.wait_for_function("typeof window.navigateTo === 'function'")
+        assert page.locator('.app-dock, #browser-settings-page, [data-pref]').count()==0
         page.evaluate("""() => {
             __appState._currentTrack={video_id:'AAAAAAAAAAA',title:'Night drive',artist:'The test band'};
             __appState._currentVideoId='AAAAAAAAAAA';__appState._hasTrack=true;
             dispatchEvent(new CustomEvent('musicbox:track'));
             openNowPlayingOverlay();
         }""")
-        tools=page.locator('#app-player-tools')
-        if width>=900: expect(tools).to_be_visible()
-        def player_action(name):
-            if width<900:
-                page.locator('#mobile-player-more').click()
-                page.locator('#np-more-menu').get_by_role('menuitem',name=name,exact=True).click()
-            else: tools.get_by_role('button',name=name,exact=name!='Sleep timer').click()
-        screenshot('player')
-        player_action('Sleep timer')
+        def action(name):
+            page.locator('#np-more-menu').get_by_role('menuitem',name=name,exact=True,include_hidden=True).evaluate('el=>el.click()')
+        action('Sleep timer')
         expect(page.get_by_role('dialog',name='Sleep timer')).to_be_visible()
-        screenshot('sleep-timer')
         page.get_by_label('Custom timer').fill('17')
         page.get_by_role('button',name='Set timer',exact=True).click()
         expect(page.get_by_role('dialog',name='Sleep timer')).not_to_be_visible()
         assert state['timer']==17
-        player_action('Lyrics')
+        action('Lyrics')
         expect(page.locator('#app-lyrics-body')).to_contain_text('Next line')
-        screenshot('lyrics')
         page.get_by_role('button',name='Close lyrics',exact=True).click()
-        with page.expect_download() as download:
-            player_action('Download')
+        with page.expect_download() as download: action('Download')
         assert download.value.suggested_filename=='Night drive.wav'
-        page.evaluate("closeNowPlayingOverlay ? closeNowPlayingOverlay() : navigateTo('#home')")
-        page.evaluate("navigateTo('#downloads')")
-        expect(page.locator('#app-download-list')).to_contain_text('Night drive')
         assert not errors,errors
-        browser.close()
-
-
-def test_browser_audio_effects_apply_and_reset_without_compressing_normal_audio(app_origin):
-    origin,_=app_origin
-    with sync_playwright() as driver:
-        browser=driver.chromium.launch()
-        page=browser.new_page()
-        page.add_init_script('''(() => {
-            const NativeContext=window.AudioContext;
-            window.AudioContext=class extends NativeContext {
-                createGain(){const node=super.createGain();window.effectGain=node;return node;}
-                createBiquadFilter(){const node=super.createBiquadFilter();window.effectBass=node;return node;}
-                createDynamicsCompressor(){const node=super.createDynamicsCompressor();window.effectLimiter=node;return node;}
-            };
-        })()''')
-        page.goto(origin+'/settings')
-        page.wait_for_function('!!window.browserPreferences')
-        page.evaluate('browserPlayback.owns=()=>true')
-        page.get_by_role('slider',name='Volume boost').focus()
-        page.get_by_role('slider',name='Volume boost').press('ArrowRight')
-        page.wait_for_function('!!window.effectGain')
-        assert page.evaluate('effectGain.gain.value')>1
-        page.get_by_role('slider',name='Bass boost').focus()
-        page.get_by_role('slider',name='Bass boost').press('ArrowRight')
-        assert page.evaluate('effectBass.gain.value')>0
-        page.get_by_role('button',name='Reset audio effects').click()
-        assert page.evaluate('effectGain.gain.value')==1
-        assert page.evaluate('effectBass.gain.value')==0
-        assert page.evaluate('effectLimiter.threshold.value')==0
         browser.close()

@@ -810,7 +810,7 @@ _PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/jam-invite/', '/signup/', '/in
 # normal Flask endpoints and are deliberately not matched by a catch-all.
 _SPA_DOCUMENT_PATHS = (
     '/home', '/search', '/playlist', '/album', '/artist', '/artist/songs',
-    '/explore', '/library', '/history', '/mood', '/now-playing', '/settings', '/downloads',
+    '/explore', '/library', '/history', '/mood', '/now-playing',
 )
 
 # Browsers (and bookmark/email/share-link generators) routinely normalize a
@@ -896,8 +896,6 @@ def _first_query_value(query, name):
 
 
 def _spa_query_is_valid(canonical_path, query):
-    if canonical_path == '/search' and not _first_query_value(query, 'q'):
-        return True
     allowed = _SPA_QUERY_FIELDS.get(canonical_path, ())
     required = allowed[:1]
     if any(not _valid_spa_route_value(
@@ -915,7 +913,7 @@ def _spa_query_is_valid(canonical_path, query):
 
 
 _JAM_PRIVATE_SPA_PATHS = {
-    '/library', '/history', '/settings', '/downloads',
+    '/library', '/history',
 }
 
 
@@ -14631,7 +14629,7 @@ const PAGE_CACHE = 'mb-pages-' + VERSION;
 const SHELL_CACHE_KEY = '/__app_shell__';
 const SPA_PATHS = [
   '/', '/remote/', '/home', '/search', '/playlist', '/album', '/artist',
-  '/artist/songs', '/explore', '/library', '/history', '/mood', '/now-playing', '/settings', '/downloads',
+  '/artist/songs', '/explore', '/library', '/history', '/mood', '/now-playing',
 ];
 const PRECACHE = __PRECACHE_JSON__;
 

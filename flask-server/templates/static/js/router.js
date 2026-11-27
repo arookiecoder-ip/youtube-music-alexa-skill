@@ -11,8 +11,7 @@
     '/explore': '#explore',
     '/library': '#library',
     '/history': '#history',
-    '/now-playing': '#now-playing',
-    '/settings': '#settings', '/downloads': '#downloads'
+    '/now-playing': '#now-playing'
   };
   var SUPPORTED_PATHS = Object.keys(STATIC_ROUTES).concat([
     '/', '/search', '/playlist', '/album', '/artist', '/artist/songs', '/mood'
@@ -56,7 +55,6 @@
   }
 
   function routeToUrl(route) {
-    if (route === '#search') return '/search';
     if (STATIC_ROUTES['/' + String(route || '').slice(1)]) return '/' + route.slice(1);
     if (route === '#home') return '/home';
     if (typeof route !== 'string') return '/home';
@@ -122,7 +120,7 @@
     if (!isSupportedPath(pathname) && !isPathStyleDetail) return '#home';
 
     var value;
-    if (pathname === '/search') return query.get('q') ? searchRoute(query.get('q')) : '#search';
+    if (pathname === '/search') return searchRoute(query.get('q') || '');
     if (pathname === '/artist/songs') {
       value = query.get('channel') || '';
       return validValue(value) ? '#artist/' + encodeURIComponent(value) + '/songs' : '#home';
@@ -268,12 +266,10 @@
   }
 
   function hideAllViews() {
-    setHidden('#browser-search-page, #browser-settings-page, #browser-downloads-page', true);
     setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #collection-detail-page, #explore-page, #library-page, #mood-page', true);
   }
 
   function showHomeViews() {
-    setHidden('#browser-search-page, #browser-settings-page, #browser-downloads-page', true);
     var state = window.__appState;
     var homeReady = !!(state && state._loggedIn && state._homeLoaded);
     var homeSection = document.getElementById('home-section');
@@ -284,15 +280,6 @@
   }
 
   var routes = {
-    '#search': function() {
-      hideAllViews(); setHidden('#browser-search-page', false);
-    },
-    '#settings': function() {
-      hideAllViews(); setHidden('#browser-settings-page', false);
-    },
-    '#downloads': function() {
-      hideAllViews(); setHidden('#browser-downloads-page', false);
-    },
     '#home': function() {
       showHomeViews();
     },
@@ -833,9 +820,6 @@
       title = 'Library';
     }
     document.title = title || SITE_NAME;
-    if (window.dispatchEvent && typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('musicbox:route', {
-      detail:{route:document.body.classList.contains('now-playing-route') ? '#now-playing' : route}
-    }));
   }
   window.syncPageTitle = syncPageTitle;
 

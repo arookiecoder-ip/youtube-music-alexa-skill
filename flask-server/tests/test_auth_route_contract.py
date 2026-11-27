@@ -33,13 +33,6 @@ class RouteContractTests(SecondFactorDoorTestBase):
             self.accounts.revoke_all_sessions(self.user,self.user['id'])
             self.assertEqual(self.client.get(path).status_code,401)
 
-    def test_app_settings_and_downloads_are_protected_spa_documents(self):
-        for path in ('/settings','/downloads'):
-            self.assertEqual(self.client.get(path).status_code,302)
-        self.login_player()
-        for path in ('/settings','/settings/','/downloads','/downloads/'):
-            self.assertEqual(self.client.get(path).status_code,200)
-
     def test_history_missing_tracking_remains_pending_without_server_error(self):
         self.login_player()
         provider = mock.Mock(auth_type='BROWSER')
