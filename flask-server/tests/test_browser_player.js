@@ -8,6 +8,7 @@ async function main() {
   let pending = false, focused = true;
   let now = 1000, owner = 'browser-id1', token = 'lease1', sequence = 0, commands = [];
   const calls = [], timers = [], events = {}, windowEvents = {};
+  const timeouts = new Map(); let timerId = 0;
   const audio = {
     paused: true, ended: false, currentTime: 0, volume: 1, readyState: 4, src: '',
     pause() { this.paused = true; },
@@ -34,7 +35,9 @@ async function main() {
     browserAudioUrl: id => '/audio/?video_id=' + id + '&wait=1' };
   const context = { window, Audio: window.Audio, crypto: { randomUUID: () => 'id' + (++sequence) },
     Date: { now: () => now }, setInterval: fn => { timers.push(fn); return 1; },
-    clearInterval() {}, setTimeout() {}, document: {visibilityState: 'visible', hasFocus: () => focused, getElementById: () => ({value: 'mobile:browser-id1'})} };
+    clearInterval() {}, setTimeout(fn, delay) { const id = ++timerId; timeouts.set(id, {fn, delay}); return id; },
+    clearTimeout(id) { timeouts.delete(id); },
+    document: {visibilityState: 'visible', hasFocus: () => focused, getElementById: () => ({value: 'mobile:browser-id1'})} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../templates/static/js/browser-player.js'), 'utf8'), context);
   const player = window.browserPlayback;
   await player.poll();
@@ -221,6 +224,7 @@ async function main() {
   await assert.rejects(player.execute('play', {}), /no longer owns/);
   await player.poll();
   assert(player.owns());
+  assert(!audio.paused, 'A renewed lease resumes the interrupted intent on the same browser');
   await player.execute('play', {});
   owner = 'another-phone'; token = 'lease2'; pending = true;
   // The watchdog may silence the old lease before the presence response.
@@ -255,7 +259,62 @@ async function main() {
   const visibility = calls.filter(call => call.body?.action === 'visibility').at(-1).body;
   assert.equal(visibility.foreground, false);
   assert.equal(visibility.playing, false);
+  const visibilityCount = calls.filter(call => call.body?.action === 'visibility').length;
+  windowEvents.blur();
+  assert.equal(calls.filter(call => call.body?.action === 'visibility').length, visibilityCount,
+    'Unchanged availability must not generate duplicate requests');
+  // Network failures reopen the same source at the saved cursor with bounded
+  // backoff. Pause and ownership changes must win over a pending retry.
+  const flush = async () => { for (let n = 0; n < 50; n++) await Promise.resolve(); };
+  const prefetches = [];
+  context.URL = URL; context.AbortController = AbortController;
+  context.navigator = window.navigator = {onLine:true};
+  window.location = {href:'https://music.example/home'};
+  context.fetch = window.fetch = async (url, options) => {
+    prefetches.push({url, options}); return {body:{cancel:async()=>{}}};
+  };
+  const fireRetry = async delay => {
+    const entry = [...timeouts].find(([, timer]) => timer.delay === delay);
+    assert(entry, 'Expected retry at ' + delay + 'ms');
+    timeouts.delete(entry[0]); await entry[1].fn(); await flush();
+  };
+  await player.execute('queue', {queue_items:[{video_id:'AAAAAAAAAAA'}, {video_id:'BBBBBBBBBBB'}]});
+  events.playing.forEach(fn => fn()); await flush();
+  assert.equal(prefetches.length, 1, 'Repeated playing events must not prefetch the same source twice');
+  const previousPrefetch = prefetches[0];
+  audio.currentTime = 7; audio.error = {code:2}; audio.paused = true;
+  events.error.forEach(fn => fn()); await fireRetry(1000);
+  assert(previousPrefetch.options.signal.aborted, 'Source recovery must cancel obsolete prefetch work');
+  assert.equal(audio.currentTime, 7, 'Recovery must retain the cursor');
+  assert.equal(audio.paused, false);
+  events.error.forEach(fn => fn()); await fireRetry(2000);
+  events.error.forEach(fn => fn()); await fireRetry(4000);
+  events.error.forEach(fn => fn()); await flush();
+  assert(audio.paused, 'Repeated failures must stop after three attempts');
+  assert(![...timeouts.values()].some(timer => [1000,2000,4000].includes(timer.delay)), 'Retries must be bounded');
+  audio.error = null;
+  await player.execute('play', {});
+  audio.error = {code:2}; events.error.forEach(fn => fn());
+  assert([...timeouts.values()].some(timer => timer.delay === 1000), 'Explicit Play resets the retry budget');
+  await player.execute('pause', {});
+  assert(![...timeouts.values()].some(timer => timer.delay === 1000), 'Pause cancels pending recovery');
+  audio.error = null;
+  await player.execute('play', {});
+  audio.currentTime = 8; timers[0](); timers[0](); now += 15001; timers[0]();
+  assert([...timeouts.values()].some(timer => timer.delay === 1000), 'A stuck stream must recover without an error event');
+  await player.execute('pause', {});
+  audio.load = function () { this.loads = (this.loads || 0) + 1; };
+  const toasts = []; window.toast = message => toasts.push(message);
+  const normalPlay = audio.play;
+  audio.play = async () => { throw Object.assign(new Error('gesture required'), {name:'NotAllowedError'}); };
+  await player.execute('play', {}); await flush();
+  assert(toasts.some(message => message.includes('Tap Play')), 'Autoplay denial needs actionable feedback');
+  assert(![...timeouts.values()].some(timer => timer.delay === 1000), 'Autoplay denial must not retry automatically');
+  audio.play = normalPlay;
   windowEvents.pagehide();
+  assert.equal(audio.src, '', 'Unload must release buffered media');
+  assert(audio.loads > 0);
+  assert(!player.owns(), 'A closed page must never reacquire playback from a late response');
   const offline = calls.filter(call => call.url === '/api/app/devices/' && call.body.action === 'offline').at(-1).body;
   assert.equal(offline.reason, 'pagehide');
   assert.equal(offline.output_token, 'lease6', 'Unload must identify the accepted playback lease');

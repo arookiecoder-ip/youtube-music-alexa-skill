@@ -21,10 +21,20 @@
   let pendingCurrent = null, mediaVideoId = '', preparingTrack = false, seekFeedbackUntil = 0;
   let mediaInstance = '';
   let resumeAttempt = 0, visibilityRevision = 0;
+  let retryTimer = null, retryCount = 0, stalledAt = 0, lastProgress = 0;
+  let leasePaused = false;
+  let prefetchController = null, prefetchUrl = '', availabilityKey = '';
   const focused = () => document.visibilityState === 'visible' && (!document.hasFocus || document.hasFocus());
   const available = () => focused() || (!audio.paused && !audio.ended);
   function publishAvailability() {
-    api('/api/app/devices/', {action:'visibility', device_id:id, session_id:session, foreground:focused(), playing:!audio.paused && !audio.ended, visibility_revision:++visibilityRevision}).catch(() => {});
+    if (stopped) return;
+    const foreground = focused(), playing = !audio.paused && !audio.ended;
+    const key = foreground + ':' + playing;
+    if (key === availabilityKey) return;
+    availabilityKey = key;
+    api('/api/app/devices/', {action:'visibility', device_id:id, session_id:session, foreground, playing, visibility_revision:++visibilityRevision}).catch(() => {
+      if (availabilityKey === key) availabilityKey = '';
+    });
   }
   function mediaState(snapshot) {
     if (!owns() || !queue[index] || changingSource || preparingTrack || mediaVideoId !== queue[index].video_id || snapshot.output_token !== accepted ||
@@ -42,7 +52,7 @@
   }
   const processing = new Set(), completed = new Set();
   const ownSerial = 'mobile:' + id;
-  const owns = () => !!output && output.playback_output === 'phone' && output.output_owner === id &&
+  const owns = () => !stopped && !!output && output.playback_output === 'phone' && output.output_owner === id &&
     !output.handoff_pending && accepted === output.output_token && Date.now() < leaseUntil;
   const track = item => ({
     video_id: item.video_id || item.videoId || item.ytVideoId || '',
@@ -59,6 +69,43 @@
     try { Promise.resolve(audio.play()).catch(() => {}); } catch (_) {}
   }
   function notify(message) { if (window.toast) window.toast(message, 'error'); }
+  function cancelRecovery(reset = true) {
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    retryTimer = null; stalledAt = 0;
+    if (reset) retryCount = 0;
+  }
+  function cancelPrefetch() {
+    if (prefetchController) prefetchController.abort();
+    prefetchController = null; prefetchUrl = '';
+  }
+  function releaseAudio() {
+    cancelRecovery(); cancelPrefetch();
+    changingSource = true;
+    audio.pause(); audio.removeAttribute('src');
+    if (audio.load) audio.load();
+    changingSource = false;
+  }
+  function recoverAudio() {
+    if (stopped || !owns() || !desiredPlaying || !queue[index] || retryTimer !== null) return;
+    if (retryCount >= 3) {
+      desiredPlaying = false; resumePending = false; audio.pause();
+      notify('Audio is still unavailable. Tap Play to retry.');
+      publish().catch(() => {}); return;
+    }
+    // Keep the requested cursor if metadata has not arrived yet.
+    const position = pendingSeek ? pendingSeek.position : Math.max(0, Math.round((audio.currentTime || 0) * 1000));
+    const capturedGeneration = generation, capturedToken = accepted, selectedIndex = index;
+    resumePending = true;
+    const delay = 1000 * (2 ** retryCount++);
+    retryTimer = setTimeout(async () => {
+      retryTimer = null;
+      if (!owns() || !desiredPlaying || generation !== capturedGeneration || accepted !== capturedToken) return;
+      if (window.navigator && navigator.onLine === false) return;
+      try { await start(selectedIndex, true, position, true); }
+      catch (_) { recoverAudio(); }
+    }, delay);
+    publish().catch(() => {});
+  }
   function publish(replace = false) {
     if (!owns() || !queue[index] || changingSource) return Promise.resolve();
     const token = accepted, capturedGeneration = generation;
@@ -118,16 +165,19 @@
     }).catch(error => {
       if (generation !== playGeneration || attempt !== resumeAttempt) return;
       if (error.name === 'AbortError') { resumePending = false; publish().catch(() => {}); return; }
-      desiredPlaying = false; resumePending = false; audio.pause(); publish().catch(() => {});
-      notify(error.name === 'NotAllowedError' ? 'Tap Play to allow audio in this browser.' : 'Could not load this track. Tap Play to retry.');
+      if (error.name !== 'NotAllowedError') { recoverAudio(); return; }
+      desiredPlaying = false; resumePending = false; cancelRecovery(); audio.pause(); publish().catch(() => {});
+      notify('Tap Play to allow audio in this browser.');
     });
   }
-  async function start(nextIndex, playing = true, position = 0) {
+  async function start(nextIndex, playing = true, position = 0, recovering = false) {
     if (!owns()) throw new Error('Playback moved to another device. Choose this browser again.');
     if (!queue[nextIndex]) return;
     const selected = queue[nextIndex];
     if (!/^[A-Za-z0-9_-]{11}$/.test(selected.video_id)) throw new Error('This track has no playable video.');
     ++generation;
+    cancelRecovery(!recovering); cancelPrefetch();
+    leasePaused = false; lastProgress = Math.max(0, position) / 1000;
     mediaInstance = uuid();
     changingSource = true;
     audio.pause();
@@ -161,11 +211,17 @@
   }
   function prefetchNext() {
     const next = queue[index + 1];
-    if (!owns() || audio.paused || !next || !window.fetch ||
+    if (!owns() || audio.paused || resumePending || audio.readyState < 3 || !next || !window.fetch ||
         window.navigator && navigator.connection && navigator.connection.saveData) return;
     const url = new URL(window.browserAudioUrl(next.video_id), window.location.href);
     url.searchParams.delete('wait'); url.searchParams.set('prefetch', '1');
-    fetch(url, { credentials: 'same-origin' }).catch(() => {});
+    if (prefetchUrl === url.href) return;
+    cancelPrefetch(); prefetchUrl = url.href;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    prefetchController = controller;
+    fetch(url, { credentials: 'same-origin', signal: controller ? controller.signal : undefined })
+      .then(response => { if (response && response.body && response.body.cancel) return response.body.cancel(); })
+      .catch(() => { if (prefetchController === controller) prefetchUrl = ''; });
   }
   function seedRadio(seed) {
     const capturedGeneration = generation, capturedToken = accepted;
@@ -207,6 +263,7 @@
     if (!owns()) throw new Error('This browser no longer owns playback.');
     if (action !== 'volume' && window.clearHandoffFeedback) window.clearHandoffFeedback();
     if (action === 'clear') {
+      releaseAudio();
       generation++; pendingSeek = null; desiredPlaying = false; resumePending = false; seekingPlayback = false; changingSource = true; audio.pause(); audio.removeAttribute('src'); queue = []; index = -1; changingSource = false;
       await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted, report_sequence: ++reportSequence });
       return;
@@ -235,10 +292,11 @@
       await start(index);
       if (owns() && queue === resolved && queue.length === 1 && !payload.playlist_id && !payload.collection && payload.radio !== false) seedRadio(queue[index].video_id);
     } else if (action === 'play') {
+      cancelRecovery();
       if (!queue[index]) return;
       if (!audio.src || audio.error || audio.ended) await start(index);
       else { resume(); await publish(); }
-    } else if (action === 'pause') { ++resumeAttempt; desiredPlaying = false; resumePending = false; audio.pause(); await publish(); }
+    } else if (action === 'pause') { cancelRecovery(); leasePaused = false; ++resumeAttempt; desiredPlaying = false; resumePending = false; audio.pause(); await publish(); }
     else if (action === 'next' || action === 'previous') {
       if (action === 'previous' && audio.currentTime > 3) { seek(0); await publish(); }
       else if (queue[index + (action === 'next' ? 1 : -1)]) await start(index + (action === 'next' ? 1 : -1));
@@ -323,6 +381,7 @@
   }
   let presenceRetryMs = 750;
   async function poll(wait = false) {
+    if (stopped) return;
     if (polling) return polling;
     polling = (async () => {
       const sentAcks = ack.splice(0, 32);
@@ -348,6 +407,9 @@
           pauseAck = null;
         }
         accepted = '';
+        leasePaused = false;
+        cancelRecovery(); cancelPrefetch();
+        if (!response.handoff_pending && audio.src) { desiredPlaying = false; releaseAudio(); }
       } else {
         pauseAck = null;
         const heartbeat = await api('/api/app/output/', { action: 'heartbeat', output_owner: id, output_token: response.output_token });
@@ -355,6 +417,10 @@
         leaseUntil = Date.now() + Math.max(0, heartbeat.phone_lease_ms - 4000);
         const changed = accepted !== response.output_token;
         accepted = response.output_token;
+        if (!changed && leasePaused && desiredPlaying) {
+          leasePaused = false;
+          if (audio.error) recoverAudio(); else resume();
+        }
         if (changed && response.now_playing) {
           queue = (response.now_playing.queue || []).map(track);
           index = response.now_playing.queue_index ?? 0;
@@ -433,15 +499,32 @@
   });
   for (const event of ['playing', 'pause', 'waiting', 'seeked']) audio.addEventListener(event, () => {
     if (!owns() || changingSource) return;
-    if (event === 'playing') { seekingPlayback = false; resumePending = false; }
-    if (event === 'pause' && audio.paused) desiredPlaying = false;
+    if (event === 'playing') { seekingPlayback = false; resumePending = false; prefetchNext(); }
+    if (event === 'waiting') stalledAt = stalledAt || Date.now();
+    if (event === 'pause' && audio.paused && !audio.error && retryTimer === null) { desiredPlaying = false; cancelRecovery(); }
     publish().then(() => {
       if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(0);
     }).catch(() => {});
   });
-  audio.addEventListener('error', () => { desiredPlaying = false; resumePending = false; audio.pause(); publish().catch(() => {}); notify('Audio could not load. Tap Play to retry.'); });
+  audio.addEventListener('error', () => {
+    if (!owns() || changingSource || stopped) return;
+    if (audio.error && audio.error.code === 3) {
+      cancelRecovery(); desiredPlaying = false; resumePending = false; audio.pause();
+      notify('This audio format could not be decoded. Try another track.'); publish().catch(() => {});
+    } else recoverAudio();
+  });
   // Independent safety clock: hung HTTP requests cannot extend audible ownership.
-  const watchdog = setInterval(() => { if (!owns()) audio.pause(); }, 500);
+  const watchdog = setInterval(() => {
+    if (!owns()) { leasePaused = desiredPlaying && !!accepted; cancelRecovery(); audio.pause(); return; }
+    if (!desiredPlaying) return;
+    const position = Number(audio.currentTime) || 0;
+    if (Math.abs(position - lastProgress) > 0.05) {
+      lastProgress = position; stalledAt = 0; retryCount = 0;
+    } else if (!audio.paused || resumePending) {
+      stalledAt = stalledAt || Date.now();
+      if (Date.now() - stalledAt >= 15000) recoverAudio();
+    }
+  }, 500);
   async function tick() {
     if (stopped) return;
     let failed = false;
@@ -453,10 +536,13 @@
   });
   window.addEventListener('focus', publishAvailability);
   window.addEventListener('blur', publishAvailability);
+  window.addEventListener('online', () => {
+    poll().then(() => { if (audio.error || resumePending) recoverAudio(); }).catch(() => {});
+  });
   ['playing', 'pause', 'ended', 'error'].forEach(event => audio.addEventListener(event, publishAvailability));
   window.addEventListener('pagehide', () => {
     const position = pendingSeek ? pendingSeek.position : Math.round((audio.currentTime || 0) * 1000);
-    stopped = true; generation++; resumePending = false; audio.pause(); clearInterval(watchdog);
+    stopped = true; generation++; resumePending = false; desiredPlaying = false; releaseAudio(); clearInterval(watchdog);
     api('/api/app/devices/', { action: 'offline', reason: 'pagehide', device_id: id, session_id: session,
       output_token: accepted, position_ms: position }).catch(() => {});
   });
