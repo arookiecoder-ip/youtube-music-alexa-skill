@@ -15,6 +15,7 @@
   // Album cards have no 3-dot button: a hold opens their menu through the
   // same contextmenu path as a PC right-click (album-context-menu.js).
   var albumCardSelector = [
+    '.library-card-album[data-album-id]',
     '.home-item[data-kind="album"][data-album-id]',
     '.hscroll-card[data-album-id]',
     '.top-result-card.is-album[data-album-id]'

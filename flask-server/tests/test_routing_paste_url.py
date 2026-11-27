@@ -240,17 +240,18 @@ class SafeSpaTarget(unittest.TestCase):
                     server._safe_spa_target(canonical + '?' + full_query),
                     expected,
                 )
-                # Slash + missing required param — must fall to default
-                # rather than produce a guessable URL.
+                # Search has an app-style discovery screen without a query;
+                # identifier-bound detail pages still require their key.
+                missing_target = '/search' if canonical == '/search' else '/home'
                 self.assertEqual(
                     server._safe_spa_target(canonical + '/'),
-                    '/home',
+                    missing_target,
                 )
                 # No-slash + missing required param — default-fall
                 # symmetry.
                 self.assertEqual(
                     server._safe_spa_target(canonical),
-                    '/home',
+                    missing_target,
                 )
 
     def test_external_url_is_rejected_with_default(self):

@@ -67,9 +67,11 @@
     const isLiked = pl.playlistId === 'LM' || pl.id === 'LM';
     const playlistId = pl.playlistId || pl.id || '';
     const artistId = pl._artistId || '';
+    const albumId = pl._albumId || '';
 
     const card = document.createElement('div');
     card.className = 'library-card' + (isLiked ? ' library-card-liked' : '');
+    if (albumId) card.dataset.albumId = albumId;
     card.setAttribute('role', 'button');
     card.setAttribute('tabindex', '0');
     card.setAttribute('aria-label', esc(title));
@@ -110,6 +112,11 @@
     }
 
     function open() {
+      if (albumId) {
+        if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(albumId);
+        else window.navigateTo('#album/' + encodeURIComponent(albumId));
+        return;
+      }
       if (artistId) {
         if (window._closeSidebar) window._closeSidebar();
         if (window.preloadNavigateArtist) window.preloadNavigateArtist(artistId);
@@ -184,7 +191,8 @@
       });
 
       const subscribedArtists = state._subscribedArtists || [];
-      if (!playlists.length && !subscribedArtists.length) {
+      const albums = (data && data.albums || []).filter(album => album && (album.browseId || album.id));
+      if (!playlists.length && !subscribedArtists.length && !albums.length) {
         body.innerHTML = `<div class="library-empty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="52" height="52">
             <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
@@ -216,6 +224,12 @@
         card.classList.add('library-card-artist');
         grid.appendChild(card);
       });
+      albums.forEach(album => {
+        const card = renderPlaylistCard({...album, _albumId:album.browseId || album.id,
+          playlistId:'', id:'', description:'Album'});
+        card.classList.add('library-card-album'); grid.appendChild(card);
+      });
+      if (window.applyBrowserLibraryFilter) window.applyBrowserLibraryFilter();
 
     } catch (e) {
       console.error('[library] Failed to load', e);

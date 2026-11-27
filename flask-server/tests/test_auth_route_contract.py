@@ -16,6 +16,30 @@ class RouteContractTests(SecondFactorDoorTestBase):
         response=self.client.post('/login/',json={'username':self.user['username'],'password':PLAYER_PASSWORD})
         self.assertEqual(response.status_code,200)
 
+    def test_browser_lyrics_requires_a_live_session_and_never_caches_private_responses(self):
+        path='/api/track/AAAAAAAAAAA/lyrics'
+        lyrics=mock.Mock()
+        lyrics.get.return_value={'available':True,'text':'Fixture lyrics','lines':[]}
+        provider=mock.Mock()
+        with mock.patch.object(self.server,'_browser_lyrics',lyrics), mock.patch.object(self.server,'_get_ytmusic_home',return_value=provider):
+            self.assertEqual(self.client.get(path).status_code,401)
+            lyrics.get.assert_not_called()
+            self.login_player()
+            response=self.client.get(path)
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(response.json['text'],'Fixture lyrics')
+            self.assertIn('no-store',response.headers['Cache-Control'])
+            lyrics.get.assert_called_once_with('user:'+self.user['id'],'AAAAAAAAAAA',provider,refresh=False)
+            self.accounts.revoke_all_sessions(self.user,self.user['id'])
+            self.assertEqual(self.client.get(path).status_code,401)
+
+    def test_app_settings_and_downloads_are_protected_spa_documents(self):
+        for path in ('/settings','/downloads'):
+            self.assertEqual(self.client.get(path).status_code,302)
+        self.login_player()
+        for path in ('/settings','/settings/','/downloads','/downloads/'):
+            self.assertEqual(self.client.get(path).status_code,200)
+
     def test_history_missing_tracking_remains_pending_without_server_error(self):
         self.login_player()
         provider = mock.Mock(auth_type='BROWSER')

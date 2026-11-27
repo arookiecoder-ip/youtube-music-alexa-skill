@@ -1,0 +1,85 @@
+<nav class="app-dock" aria-label="Main navigation">
+  <a href="/home" data-app-route="#home"><svg viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v11h-6v-7H9v7H3Z"/></svg><span>Home</span></a>
+  <a href="/search" data-app-route="#search"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7.5"/><path d="m16 16 6 6"/></svg><span>Search</span></a>
+  {% if not jam_guest %}<a href="/library" data-app-route="#library"><svg viewBox="0 0 24 24"><path d="M4 3v18M9 3v18M14 4l5-1 4 17-5 1Z"/></svg><span>Library</span></a>{% endif %}
+</nav>
+<div class="app-connectivity" id="app-connectivity" role="status" hidden>You're offline. Reconnecting when a connection is available.</div>
+<section class="app-page" id="browser-search-page" hidden aria-labelledby="app-search-title">
+  <div class="app-page-head"><div><span class="app-eyebrow">DISCOVER YOUR NEXT PLAY</span><h1 id="app-search-title">Search</h1></div></div>
+  <p class="app-description">Find a song, artist, album, playlist, or paste a YouTube link.</p>
+  <button class="app-search-entry" data-app-action="focus-search"><svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="7"/><path d="m16 16 5 5"/></svg>Search Music Box</button>
+  <h2>Browse</h2><div class="app-browse-grid">
+    <a href="/explore" data-app-route="#explore"><span>Discover</span><strong>New releases & charts</strong><small>Find what's next</small></a>
+    <a href="/explore" data-app-route="#explore"><span>For every moment</span><strong>Moods & genres</strong><small>Choose your sound</small></a>
+    {% if not jam_guest %}<a href="/history" data-app-route="#history"><span>Your listening</span><strong>Recently played</strong><small>Pick up where you left off</small></a>{% endif %}
+  </div>
+  <div id="app-recent-searches" class="app-recent-searches"></div>
+</section>
+{% if not jam_guest %}
+<section class="app-page" id="browser-settings-page" hidden aria-labelledby="app-settings-title">
+  <div class="app-page-head"><h1 id="app-settings-title">Settings</h1><a href="/account">Profile and security ↗</a></div>
+  <div class="app-settings-grid">
+    <div class="app-settings-group"><h2>Appearance & playback</h2>
+      <label class="app-setting"><span>Theme<small>Match your device or choose your own</small></span><select data-pref="theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+      <label class="app-setting"><span>Haptic feedback<small>Touch feedback on supported devices</small></span><input type="checkbox" role="switch" data-pref="haptics"></label>
+      <label class="app-setting"><span>Mini-player lyrics<small>Show available lyrics below the player</small></span><input type="checkbox" role="switch" data-pref="miniLyrics"></label>
+      <label class="app-setting"><span>Preload next song<small>Warm the next stream after audio starts</small></span><input type="checkbox" role="switch" data-pref="preload"></label>
+      <label class="app-setting"><span>Preload on mobile data<small>Data Saver always takes priority</small></span><input type="checkbox" role="switch" data-pref="mobilePreload"></label>
+      <label class="app-setting"><span>Reduce motion<small>Keep navigation and player transitions simple</small></span><input type="checkbox" role="switch" data-pref="reduceMotion"></label>
+    </div>
+    <div class="app-settings-group"><h2>Your music</h2>
+      <button class="app-setting" data-app-action="devices"><span>Playback devices<small>This browser, your phones, and Alexa</small></span><span>›</span></button>
+      <a class="app-setting" href="/downloads" data-app-route="#downloads"><span>Downloads<small>Save audio files to this device</small></span><span>›</span></a>
+      <a class="app-setting" href="/history" data-app-route="#history"><span>Recently played<small>Your listening history</small></span><span>›</span></a>
+      <a class="app-setting" href="/jam-room/"><span>Jam<small>Listen together and manage your room</small></span><span>↗</span></a>
+      <a class="app-setting" href="/account#panel-providers"><span>Connected accounts<small>YouTube Music and Amazon</small></span><span>↗</span></a>
+    </div>
+    <div class="app-settings-group"><h2>Sound on this browser</h2>
+      <label class="app-setting"><span>Volume boost<small>Applies only to browser playback</small></span><input type="range" min="0" max="100" value="0" data-pref="boost" aria-label="Volume boost"></label>
+      <label class="app-setting"><span>Bass boost<small>Use headphones or speakers at a safe volume</small></span><input type="range" min="0" max="12" value="0" data-pref="bass" aria-label="Bass boost"></label>
+      <button class="app-setting" data-app-action="reset-sound"><span>Reset audio effects</span><span>↺</span></button>
+      <p class="app-note" id="app-sound-note">Audio effects activate when you interact with this browser's player.</p>
+    </div>
+    <div class="app-settings-group"><h2>App & storage</h2>
+      <button class="app-setting" data-app-action="install"><span>Install Music Box<small>Add the browser app to your home screen</small></span><span>↗</span></button>
+      <button class="app-setting" data-app-action="storage"><span>Storage usage<small id="app-storage-usage">Check browser storage</small></span><span>↻</span></button>
+      <button class="app-setting" data-app-action="clear-cache"><span>Clear display cache<small>Refresh cached pages and app files</small></span><span>↺</span></button>
+      <button class="app-setting" data-app-action="diagnostics"><span>Playback diagnostics<small>Copy browser, track, and connection details</small></span><span>↗</span></button>
+      <button class="app-setting app-danger" data-app-action="signout"><span>Sign out</span><span>↗</span></button>
+    </div>
+  </div>
+</section>
+<section class="app-page" id="browser-downloads-page" hidden aria-labelledby="app-downloads-title">
+  <div class="app-page-head"><h1 id="app-downloads-title">Downloads</h1><button data-app-action="download">Save current song</button></div>
+  <p class="app-description">Audio is saved to your device's Downloads folder. Open saved files in your music player to listen offline.</p>
+  <div class="app-download-list" id="app-download-list"></div>
+  <p class="app-note">Android's device-library scanner, system equalizer, and background download manager stay in the Android app. Browser downloads use your browser's file permissions.</p>
+</section>
+{% endif %}
+<div class="app-player-tools" id="app-player-tools" hidden>
+  <button data-app-action="lyrics">Lyrics</button><button data-app-action="timer">Sleep timer <span id="app-timer-badge"></span></button>
+  <button data-app-action="language">Audio language</button>{% if not jam_guest %}<button data-app-action="download">Download</button>{% endif %}
+</div>
+<div class="app-mini-lyrics" id="app-mini-lyrics" hidden></div>
+<dialog class="app-sheet" id="app-timer-dialog" aria-labelledby="app-timer-title">
+  <div class="app-sheet-heading"><h2 id="app-timer-title">Sleep timer</h2><button data-close-dialog aria-label="Close sleep timer">✕</button></div>
+  <p id="app-timer-status" role="status">Stop playback after a set time.</p>
+  <form id="app-timer-form"><div class="app-timer-presets">{% for minutes in [5,15,30,45,60,90] %}<button type="button" data-timer-minutes="{{ minutes }}">{{ minutes }} min</button>{% endfor %}</div>
+    <label class="app-field">Custom timer (1–180 minutes)<input id="app-timer-minutes" type="number" min="1" max="180" value="30" required></label>
+    <button class="app-primary" type="submit">Set timer</button><button type="button" data-app-action="cancel-timer">Cancel timer</button>
+  </form>
+</dialog>
+<dialog class="app-sheet" id="app-lyrics-dialog" aria-labelledby="app-lyrics-title">
+  <div class="app-sheet-heading"><h2 id="app-lyrics-title">Lyrics</h2><button data-close-dialog aria-label="Close lyrics">✕</button></div>
+  <p id="app-lyrics-track"></p><div class="app-lyrics-body" id="app-lyrics-body" aria-live="polite">Choose a song to see lyrics.</div>
+  <p class="app-note" id="app-lyrics-source"></p>
+  <button data-app-action="refresh-lyrics">Refresh lyrics</button>
+</dialog>
+<dialog class="app-sheet" id="app-devices-dialog" aria-labelledby="app-devices-title">
+  <div class="app-sheet-heading"><h2 id="app-devices-title">Play on</h2><button data-close-dialog aria-label="Close devices">✕</button></div>
+  <p>Choose where your music plays.</p><div id="app-device-list"></div><button data-app-action="refresh-devices">Refresh devices</button>
+</dialog>
+<dialog class="app-sheet" id="app-language-dialog" aria-labelledby="app-language-title">
+  <div class="app-sheet-heading"><h2 id="app-language-title">Audio language</h2><button data-close-dialog aria-label="Close audio language">✕</button></div>
+  <div id="app-language-list" aria-live="polite"></div>
+</dialog>

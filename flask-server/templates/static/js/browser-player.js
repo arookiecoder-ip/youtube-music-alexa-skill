@@ -23,6 +23,45 @@
   let resumeAttempt = 0, visibilityRevision = 0;
   let retryTimer = null, retryCount = 0, stalledAt = 0, lastProgress = 0;
   let leasePaused = false;
+  const audioLanguages = new Map();
+  let mediaSessionKey = '';
+  function clearMediaSession() {
+    const media = window.navigator && navigator.mediaSession;
+    if (!media) return;
+    media.metadata = null; media.playbackState = 'none'; mediaSessionKey = '';
+    if (media.setPositionState) { try { media.setPositionState(); } catch (_) {} }
+  }
+  function syncMediaSession() {
+    const media = window.navigator && navigator.mediaSession, item = queue[index];
+    if (!media || !owns() || !item) return;
+    const key = [item.video_id,item.title,item.artist,item.thumbnail].join('\n');
+    if (window.MediaMetadata && key !== mediaSessionKey) {
+      try {
+        media.metadata = new window.MediaMetadata({title:item.title || item.video_id, artist:item.artist || '',
+          album:'Music Box', artwork:item.thumbnail ? [{src:item.thumbnail}] : []});
+        mediaSessionKey = key;
+      } catch (_) {}
+    }
+    media.playbackState = !audio.paused && !audio.ended ? 'playing' : 'paused';
+    if (media.setPositionState && Number.isFinite(audio.duration) && audio.duration > 0) {
+      try { media.setPositionState({duration:audio.duration, playbackRate:audio.playbackRate || 1,
+        position:Math.max(0,Math.min(audio.duration,audio.currentTime || 0))}); } catch (_) {}
+    }
+  }
+  function sourceUrl(video) {
+    const raw = window.browserAudioUrl(video);
+    if (!audioLanguages.has(video)) return raw;
+    const url = new URL(raw, window.location.href);
+    url.searchParams.set('audio_track', audioLanguages.get(video));
+    return url.href;
+  }
+  async function selectAudioLanguage(language) {
+    if (!/^[A-Za-z0-9_.-]{1,80}$/.test(language) || !owns() || !queue[index]) throw new Error('Choose an available audio language.');
+    const video = queue[index].video_id, position = Math.max(0, Math.round((audio.currentTime || 0) * 1000));
+    audioLanguages.delete(video); audioLanguages.set(video, language);
+    if (audioLanguages.size > 20) audioLanguages.delete(audioLanguages.keys().next().value);
+    await start(index, desiredPlaying, position);
+  }
   let prefetchController = null, prefetchUrl = '', availabilityKey = '';
   const focused = () => document.visibilityState === 'visible' && (!document.hasFocus || document.hasFocus());
   const available = () => focused() || (!audio.paused && !audio.ended);
@@ -80,6 +119,7 @@
   }
   function releaseAudio() {
     cancelRecovery(); cancelPrefetch();
+    clearMediaSession();
     changingSource = true;
     audio.pause(); audio.removeAttribute('src');
     if (audio.load) audio.load();
@@ -108,6 +148,7 @@
   }
   function publish(replace = false) {
     if (!owns() || !queue[index] || changingSource) return Promise.resolve();
+    syncMediaSession();
     const token = accepted, capturedGeneration = generation;
     const body = {
       playback_instance: preparingTrack ? null : mediaInstance || null,
@@ -183,7 +224,7 @@
     audio.pause();
     index = nextIndex;
     pendingSeek = null; seekingPlayback = false; resumePending = false; desiredPlaying = playing;
-    audio.src = window.browserAudioUrl(selected.video_id);
+    audio.src = sourceUrl(selected.video_id);
     mediaVideoId = selected.video_id; preparingTrack = false;
     changingSource = false;
     seek(Math.max(0, position));
@@ -210,10 +251,12 @@
     }).catch(() => { /* Audio stays usable when metadata is unavailable. */ });
   }
   function prefetchNext() {
+    const prefs = window.browserPreferences;
+    if (prefs && (!prefs.preload || !prefs.mobilePreload && window.navigator && navigator.connection && navigator.connection.type === 'cellular')) return;
     const next = queue[index + 1];
     if (!owns() || audio.paused || resumePending || audio.readyState < 3 || !next || !window.fetch ||
         window.navigator && navigator.connection && navigator.connection.saveData) return;
-    const url = new URL(window.browserAudioUrl(next.video_id), window.location.href);
+    const url = new URL(sourceUrl(next.video_id), window.location.href);
     url.searchParams.delete('wait'); url.searchParams.set('prefetch', '1');
     if (prefetchUrl === url.href) return;
     cancelPrefetch(); prefetchUrl = url.href;
@@ -407,6 +450,7 @@
           pauseAck = null;
         }
         accepted = '';
+        clearMediaSession();
         leasePaused = false;
         cancelRecovery(); cancelPrefetch();
         if (!response.handoff_pending && audio.src) { desiredPlaying = false; releaseAudio(); }
@@ -515,7 +559,11 @@
   });
   // Independent safety clock: hung HTTP requests cannot extend audible ownership.
   const watchdog = setInterval(() => {
-    if (!owns()) { leasePaused = desiredPlaying && !!accepted; cancelRecovery(); audio.pause(); return; }
+    if (!owns()) {
+      leasePaused = desiredPlaying && !!accepted; cancelRecovery(); audio.pause();
+      if (accepted && window.navigator && navigator.mediaSession) navigator.mediaSession.playbackState = 'paused';
+      return;
+    }
     if (!desiredPlaying) return;
     const position = Number(audio.currentTime) || 0;
     if (Math.abs(position - lastProgress) > 0.05) {
@@ -547,6 +595,18 @@
       output_token: accepted, position_ms: position }).catch(() => {});
   });
   window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
-  window.browserPlayback = { id, audio, owns, execute, poll, mediaState, activate, available };
+  if (window.navigator && navigator.mediaSession && navigator.mediaSession.setActionHandler) {
+    const handlers = {
+      play:() => enqueue('play',{}), pause:() => enqueue('pause',{}), stop:() => enqueue('pause',{}),
+      nexttrack:() => enqueue('next',{}), previoustrack:() => enqueue('previous',{}),
+      seekto:details => enqueue('seek',{position_ms:Math.max(0, Number(details.seekTime) || 0)*1000}),
+      seekbackward:details => enqueue('seek',{position_ms:Math.max(0,(audio.currentTime || 0)-(details.seekOffset || 10))*1000}),
+      seekforward:details => enqueue('seek',{position_ms:((audio.currentTime || 0)+(details.seekOffset || 10))*1000})
+    };
+    for (const [action, handler] of Object.entries(handlers)) {
+      try { navigator.mediaSession.setActionHandler(action, details => owns() ? handler(details || {}).catch(error => notify(error.message)) : undefined); } catch (_) {}
+    }
+  }
+  window.browserPlayback = { id, audio, owns, execute, poll, mediaState, activate, available, selectAudioLanguage };
   tick();
 })();

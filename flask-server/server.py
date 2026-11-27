@@ -810,7 +810,7 @@ _PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/jam-invite/', '/signup/', '/in
 # normal Flask endpoints and are deliberately not matched by a catch-all.
 _SPA_DOCUMENT_PATHS = (
     '/home', '/search', '/playlist', '/album', '/artist', '/artist/songs',
-    '/explore', '/library', '/history', '/mood', '/now-playing',
+    '/explore', '/library', '/history', '/mood', '/now-playing', '/settings', '/downloads',
 )
 
 # Browsers (and bookmark/email/share-link generators) routinely normalize a
@@ -896,6 +896,8 @@ def _first_query_value(query, name):
 
 
 def _spa_query_is_valid(canonical_path, query):
+    if canonical_path == '/search' and not _first_query_value(query, 'q'):
+        return True
     allowed = _SPA_QUERY_FIELDS.get(canonical_path, ())
     required = allowed[:1]
     if any(not _valid_spa_route_value(
@@ -913,7 +915,7 @@ def _spa_query_is_valid(canonical_path, query):
 
 
 _JAM_PRIVATE_SPA_PATHS = {
-    '/library', '/history',
+    '/library', '/history', '/settings', '/downloads',
 }
 
 
@@ -13610,6 +13612,23 @@ async def api_track_metadata(video_id):
     return jsonify(metadata)
 
 
+from browser_lyrics import BrowserLyrics
+_browser_lyrics = BrowserLyrics()
+
+
+@app.route('/api/track/<video_id>/lyrics', methods=['GET'])
+def api_track_lyrics(video_id):
+    if not _valid_video_id(video_id):
+        return error_response('Invalid video id.', 400)
+    try:
+        result = _browser_lyrics.get(_current_identity(), video_id, _get_ytmusic_home(),
+                                     refresh=request.args.get('refresh') == '1')
+        return _no_store(jsonify(result))
+    except Exception:
+        logger.warning('Browser lyrics lookup is temporarily unavailable')
+        return error_response('Lyrics could not load. Try again shortly.', 503)
+
+
 @app.route("/api/artist/<channel_id>/releases", methods=["GET"])
 async def api_artist_releases(channel_id):
     """Return bounded pages of an artist's complete album/single collection."""
@@ -14612,7 +14631,7 @@ const PAGE_CACHE = 'mb-pages-' + VERSION;
 const SHELL_CACHE_KEY = '/__app_shell__';
 const SPA_PATHS = [
   '/', '/remote/', '/home', '/search', '/playlist', '/album', '/artist',
-  '/artist/songs', '/explore', '/library', '/history', '/mood', '/now-playing',
+  '/artist/songs', '/explore', '/library', '/history', '/mood', '/now-playing', '/settings', '/downloads',
 ];
 const PRECACHE = __PRECACHE_JSON__;
 

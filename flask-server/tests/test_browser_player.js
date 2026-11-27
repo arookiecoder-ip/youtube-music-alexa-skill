@@ -9,6 +9,9 @@ async function main() {
   let now = 1000, owner = 'browser-id1', token = 'lease1', sequence = 0, commands = [];
   const calls = [], timers = [], events = {}, windowEvents = {};
   const timeouts = new Map(); let timerId = 0;
+  const mediaHandlers = {}, mediaSession = {metadata:null, playbackState:'none',
+    setActionHandler(action,handler) { mediaHandlers[action] = handler; },
+    setPositionState(position) { this.position = position; }};
   const audio = {
     paused: true, ended: false, currentTime: 0, volume: 1, readyState: 4, src: '',
     pause() { this.paused = true; },
@@ -32,8 +35,10 @@ async function main() {
     return {ok: true};
   };
   const window = { api, crypto: {}, Audio: function () { return audio; }, addEventListener(name, handler) { windowEvents[name] = handler; },
+    navigator:{mediaSession}, MediaMetadata:class { constructor(value) { Object.assign(this,value); } },
     browserAudioUrl: id => '/audio/?video_id=' + id + '&wait=1' };
   const context = { window, Audio: window.Audio, crypto: { randomUUID: () => 'id' + (++sequence) },
+    navigator:window.navigator,
     Date: { now: () => now }, setInterval: fn => { timers.push(fn); return 1; },
     clearInterval() {}, setTimeout(fn, delay) { const id = ++timerId; timeouts.set(id, {fn, delay}); return id; },
     clearTimeout(id) { timeouts.delete(id); },
@@ -48,6 +53,8 @@ async function main() {
   await player.execute('queue', {queue_items: [{video_id: 'AAAAAAAAAAA'}, {video_id: 'BBBBBBBBBBB'}]});
   assert.equal(audio.src, '/audio/?video_id=AAAAAAAAAAA&wait=1');
   assert.equal(audio.paused, false);
+  assert.equal(mediaSession.metadata.title, 'AAAAAAAAAAA');
+  assert.equal(mediaSession.playbackState, 'playing');
   let releasePresence;
   presenceGate = new Promise(resolve => { releasePresence = resolve; });
   const backgroundPresence = player.poll(true);
@@ -268,7 +275,7 @@ async function main() {
   const flush = async () => { for (let n = 0; n < 50; n++) await Promise.resolve(); };
   const prefetches = [];
   context.URL = URL; context.AbortController = AbortController;
-  context.navigator = window.navigator = {onLine:true};
+  context.navigator = window.navigator = {...window.navigator,onLine:true};
   window.location = {href:'https://music.example/home'};
   context.fetch = window.fetch = async (url, options) => {
     prefetches.push({url, options}); return {body:{cancel:async()=>{}}};
@@ -282,6 +289,10 @@ async function main() {
   events.playing.forEach(fn => fn()); await flush();
   assert.equal(prefetches.length, 1, 'Repeated playing events must not prefetch the same source twice');
   const previousPrefetch = prefetches[0];
+  audio.currentTime = 7;
+  await player.selectAudioLanguage('en.4');
+  assert.equal(new URL(audio.src).searchParams.get('audio_track'), 'en.4');
+  assert.equal(audio.currentTime, 7, 'Changing language must preserve the current cursor');
   audio.currentTime = 7; audio.error = {code:2}; audio.paused = true;
   events.error.forEach(fn => fn()); await fireRetry(1000);
   assert(previousPrefetch.options.signal.aborted, 'Source recovery must cancel obsolete prefetch work');
@@ -311,9 +322,15 @@ async function main() {
   assert(toasts.some(message => message.includes('Tap Play')), 'Autoplay denial needs actionable feedback');
   assert(![...timeouts.values()].some(timer => timer.delay === 1000), 'Autoplay denial must not retry automatically');
   audio.play = normalPlay;
+  await mediaHandlers.play(); await flush();
+  await mediaHandlers.seekto({seekTime:8});
+  assert.equal(audio.currentTime, 8, 'System media controls must seek the browser audio');
+  await mediaHandlers.pause();
+  assert(audio.paused, 'System media controls must honor Pause');
   windowEvents.pagehide();
   assert.equal(audio.src, '', 'Unload must release buffered media');
   assert(audio.loads > 0);
+  assert.equal(mediaSession.metadata, null, 'Closing the player releases system media metadata');
   assert(!player.owns(), 'A closed page must never reacquire playback from a late response');
   const offline = calls.filter(call => call.url === '/api/app/devices/' && call.body.action === 'offline').at(-1).body;
   assert.equal(offline.reason, 'pagehide');

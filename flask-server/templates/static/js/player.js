@@ -557,6 +557,7 @@ function showNowPlaying(info) {
     };
     updateUrlBar();
     syncTrackPlaybackIndicators();
+    if (window.dispatchEvent && typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('musicbox:track'));
     // Visual cue for the song change. Called AFTER background-image / text
     // updates so the artwork already shows the new cover as it animates in.
     // Skipped internally when a swipe-exit is still in flight, so a swipe

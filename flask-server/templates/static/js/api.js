@@ -113,7 +113,7 @@
   let _progressTimeout = null;
 
   function _backgroundPlaybackRequest(url) {
-    return /\/(?:alexa\/(?:status|now_playing|command|jam\/status|volume|seek)|api\/app\/(?:devices|output|queue))(?:[/?]|$)/.test(url);
+    return /\/(?:alexa\/(?:status|now_playing|command|jam\/status|volume|seek)|api\/app\/(?:devices|output|queue|sleep-timer))(?:[/?]|$)/.test(url);
   }
 
   function _showProgress(url) {

@@ -181,7 +181,8 @@
         (!state._searchPreviousRoute || state._searchPreviousRoute === '#home');
       const shouldShow = state._loggedIn &&
         ((!searchRoute && !state._resultsOpen) || preserveHomeDuringSearch) &&
-        !artistOpen && !playlistOpen && !albumOpen && !historyOpen && !exploreOpen && !moodOpen && !libraryOpen && !npOpen;
+        !artistOpen && !playlistOpen && !albumOpen && !historyOpen && !exploreOpen && !moodOpen && !libraryOpen && !npOpen &&
+        !['#search', '#settings', '#downloads'].includes(route);
       if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
       else homeSection.hidden = !shouldShow || !state._homeLoaded;
     }

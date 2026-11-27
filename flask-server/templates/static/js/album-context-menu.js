@@ -91,12 +91,12 @@
     // Track rows/cards also carry an album id (title navigation), so only
     // album entities match: album-kind home tiles, album shelf cards and the
     // album Top Result hero.
-    var card = event.target.closest('.home-item[data-kind="album"][data-album-id], .hscroll-card[data-album-id], .top-result-card.is-album[data-album-id]');
+    var card = event.target.closest('.home-item[data-kind="album"][data-album-id], .hscroll-card[data-album-id], .top-result-card.is-album[data-album-id], .library-card-album[data-album-id]');
     if (!card) return;
     var id = card.dataset.albumId || '';
     if (!id) return;
     var title = card.dataset.title ||
-      ((card.querySelector('.home-item-title, .hscroll-card-title, .top-result-title') || {}).textContent || 'Album');
+      ((card.querySelector('.home-item-title, .hscroll-card-title, .top-result-title, .library-card-title') || {}).textContent || 'Album');
     var art = card.querySelector('img');
     var sub = card.querySelector('.home-item-subtitle, .hscroll-card-artist, .hscroll-card-sub, .top-result-subtitle');
     window.openAlbumContextMenu(event, {

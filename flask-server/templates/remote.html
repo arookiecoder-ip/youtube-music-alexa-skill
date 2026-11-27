@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Music Box</title>
+<script>
+  try {
+    var browserTheme = JSON.parse(localStorage.getItem('musicbox.browser.preferences.v1') || '{}').theme || 'dark';
+    document.documentElement.dataset.theme = browserTheme === 'light' || browserTheme === 'system' && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  } catch (_) {}
+</script>
 <link rel="icon" type="image/svg+xml" href="/favicon.ico">
 <!-- PWA: installable web remote -->
 <link rel="manifest" href="/manifest.webmanifest">
@@ -52,6 +58,7 @@
 <link rel="stylesheet" href="/static/css/playlist.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/explore.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/mobile.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/browser-app.css?v={{ asset_v }}">
 </head>
 <body data-alexa-enabled="{{ 'true' if alexa_access_enabled else 'false' }}" class="preload{{ ' jam-guest' if jam_guest else '' }}">
 <div id="top-progress-bar" class="top-progress-bar"></div>
@@ -144,7 +151,8 @@
             {% if alexa_access_enabled %}<div><strong>Amazon</strong> <span id="status-amazon">Checking&hellip;</span></div>{% endif %}
             <div><strong>YouTube</strong> <span id="status-yt-headers">Checking&hellip;</span></div>
           </div>
-          {% if account_available %}<a class="jam-owner-only profile-menu-link" href="/account">Your account</a>{% endif %}
+          <a class="profile-menu-link" href="/settings" data-app-route="#settings">Settings</a>
+          {% if account_available %}<a class="jam-owner-only profile-menu-link" href="/account">Profile and security</a>{% endif %}
           {% endif %}
           {% if jam_guest %}<button id="logout" type="button">Leave Jam</button>{% endif %}
         </div>
@@ -537,6 +545,10 @@
           <div class="np-page-artist" id="np-page-artist"></div>
         </div>
         <div class="mobile-np-actions" role="group" aria-label="Actions">
+          {% if not jam_guest %}
+          <button type="button" data-app-action="radio" aria-label="Start radio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="18" height="14" rx="2"/><path d="m4 7 15-5M3 12h18"/><circle cx="8" cy="16" r="2"/></svg><span class="mobile-np-action-label">Radio</span></button>
+          <button type="button" data-app-action="devices" aria-label="Playback devices"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="20" rx="2"/><circle cx="12" cy="16" r="3"/><path d="M10 6h4"/></svg><span class="mobile-np-action-label">Devices</span></button>
+          {% endif %}
           <button type="button" id="mobile-np-like" aria-label="Like" title="Like">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
             <span class="mobile-np-action-label">Like</span>
@@ -673,6 +685,17 @@
   <section id="library-page" hidden>
     <div class="page-header">
       <h3>Library</h3>
+      {% if not jam_guest %}<a href="/downloads" data-app-route="#downloads" class="app-library-downloads">Downloads</a>{% endif %}
+    </div>
+    <div class="app-library-toolbar">
+      <input id="app-library-query" type="search" placeholder="Search your library" aria-label="Search your library">
+      <button type="button" data-app-action="create-playlist">New playlist</button>
+      <button type="button" data-app-action="library-layout" aria-label="Toggle library layout">List / grid</button>
+      <button type="button" data-app-action="refresh-library" aria-label="Refresh library">↻</button>
+    </div>
+    <div class="app-library-filters" role="group" aria-label="Library filters">
+      {% for filter in ['All','Playlists','Albums','Artists'] %}<button type="button" data-library-filter="{{ filter|lower }}" aria-pressed="{{ 'true' if filter == 'All' else 'false' }}">{{ filter }}</button>{% endfor %}
+      <a href="/downloads" data-app-route="#downloads">Downloads</a>
     </div>
     <div class="page-body" id="library-page-body">
       <div class="loading-spinner"></div>
@@ -687,6 +710,7 @@
     <div class="page-body" id="mood-page-body"></div>
   </section>
 
+{% include 'browser-app.html' %}
 </main>
 
 <!-- Queue popup modal (mobile) -->
@@ -972,6 +996,7 @@
 <script src="/static/js/mobile-context-sheet.js?v={{ asset_v }}"></script>
 <script src="/static/js/like.js?v={{ asset_v }}"></script>
 <script src="/static/js/click-effects.js?v={{ asset_v }}"></script>
+<script src="/static/js/browser-app.js?v={{ asset_v }}"></script>
 <script>
   (function () {
     if (window.restoreFromCache) window.restoreFromCache();
