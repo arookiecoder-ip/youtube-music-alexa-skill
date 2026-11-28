@@ -58,6 +58,12 @@ async function main() {
   assert(closeBlocked(), 'Active browser music must warn before close or reload');
   audio.volume=0; assert(closeBlocked(), 'Muted playback still has an active session');
   assert.equal(mediaSession.metadata.title, 'AAAAAAAAAAA');
+  const staleSnapshot = {output_token:token,video_id:'ZZZZZZZZZZZ'};
+  const corrected = player.mediaState(staleSnapshot);
+  assert.equal(corrected.video_id,'AAAAAAAAAAA','Current browser media overrides an old song on the same output');
+  assert.equal(corrected.queue[corrected.queue_index].video_id,corrected.video_id);
+  assert.equal(player.mediaState({...staleSnapshot,output_token:'other-output'}),null);
+
   assert.equal(mediaSession.playbackState, 'playing');
   let releasePresence;
   presenceGate = new Promise(resolve => { releasePresence = resolve; });

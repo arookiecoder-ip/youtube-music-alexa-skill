@@ -15,3 +15,15 @@ assert.notEqual(duplicate,first,'A duplicated/new tab must receive its own playb
 assert.equal(open('reload'),duplicate);
 assert.notEqual(open('reload',true),duplicate,'Blocked storage must safely generate a new identity');
 console.log('PASS browser identity: refresh, duplicated tabs and unavailable storage');
+
+const sequenceStart=source.indexOf('  const reportSequenceKey');
+const sequenceEnd=source.indexOf('  let mediaInstance',sequenceStart);
+const storage=new Map();
+function report(reload, now) {
+ const sessionStorage={getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)};
+ return vm.runInNewContext('let reportSequence=0;'+source.slice(sequenceStart,sequenceEnd)+'nextReportSequence()', {
+   reload,window:{sessionStorage},Date:{now:()=>now}
+ });
+}
+assert.equal(report(false,1000),1000);
+assert.equal(report(true,900),1001,'Reload must keep reports ordered even if the clock moved back');

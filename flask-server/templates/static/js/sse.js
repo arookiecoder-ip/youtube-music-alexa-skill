@@ -47,6 +47,10 @@
   function handleNpUpdate(np) {
     const localMedia = arguments[1] === true;
     if (!np) return;
+    if (window.browserPlayback && window.browserPlayback.mediaState) {
+      const media = window.browserPlayback.mediaState(np);
+      if (media) np = Object.assign({}, np, media);
+    }
     const npVideoId = (np && np.video_id) || null;
     // Drop snapshots describing a track the user has already clicked away
     // from. The server needs a moment to catch up after each click, so during
@@ -62,10 +66,6 @@
     }
     if (!localMedia && window.playbackStore && !window.playbackStore.accept(np)) return;
     if (window.observeSharedOutput && window.observeSharedOutput(np) === false) return;
-    if (window.browserPlayback && window.browserPlayback.mediaState) {
-      const media = window.browserPlayback.mediaState(np);
-      if (media) np = Object.assign({}, np, media);
-    }
     window.updateAlexaControlState?.(np);
     _lastProcessing = np.playback_processing === true;
     if (np.queue_version !== undefined && np.queue !== undefined) _queueVersion = np.queue_version;

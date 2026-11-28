@@ -19,6 +19,20 @@
   let changingSource = false, pendingSeek = null, seekingPlayback = false, desiredPlaying = false, resumePending = false;
   let presenceRevision = -1, pauseAck = null, reportSequence = 0;
   let pendingCurrent = null, mediaVideoId = '', preparingTrack = false, seekFeedbackUntil = 0;
+  const reportSequenceKey = 'musicbox_browser_report_sequence';
+  try {
+    if (reload) {
+      const saved = Number(window.sessionStorage?.getItem(reportSequenceKey));
+      if (Number.isSafeInteger(saved) && saved > 0) reportSequence = saved;
+    }
+  } catch (_) {}
+  function nextReportSequence() {
+    // A reload can keep the same output token while the old page's reports
+    // are still in flight. Continue its sequence for that same browser.
+    reportSequence = Math.max(reportSequence + 1, Date.now());
+    try { window.sessionStorage?.setItem(reportSequenceKey, String(reportSequence)); } catch (_) {}
+    return reportSequence;
+  }
   let mediaInstance = '';
   let resumeAttempt = 0, visibilityRevision = 0;
   let retryTimer = null, retryCount = 0, stalledAt = 0, lastProgress = 0;
@@ -76,10 +90,12 @@
     });
   }
   function mediaState(snapshot) {
-    if (!owns() || !queue[index] || changingSource || preparingTrack || mediaVideoId !== queue[index].video_id || snapshot.output_token !== accepted ||
-        snapshot.video_id !== queue[index].video_id) return null;
+    if (!owns() || !queue[index] || changingSource || preparingTrack || mediaVideoId !== queue[index].video_id || snapshot.output_token !== accepted) return null;
     const buffering = resumePending || !audio.paused && audio.readyState < 3 && !(seekingPlayback && Date.now() < seekFeedbackUntil);
-    return { playing: !audio.paused && !audio.ended, playback_processing: buffering,
+    const trackChanged = snapshot.video_id !== queue[index].video_id;
+    return { ...(trackChanged ? { ...queue[index], queue, queue_index: index } : {}),
+      playback_instance: mediaInstance,
+      playing: !audio.paused && !audio.ended, playback_processing: buffering,
       playback_confirmed: !buffering,
       position_ms: pendingSeek ? pendingSeek.position : Math.max(0, Math.round((audio.currentTime || 0) * 1000)) };
   }
@@ -171,7 +187,7 @@
     const token = accepted, capturedGeneration = generation;
     const body = {
       playback_instance: preparingTrack ? null : mediaInstance || null,
-      report_sequence: ++reportSequence,
+      report_sequence: nextReportSequence(),
       action: replace ? 'start' : 'current', tracks: replace ? queue.map(item => ({...item})) : [],
       after: queue[index].video_id, queue_index: index, output_owner: id, output_token: token,
       position_ms: pendingSeek ? pendingSeek.position : Math.max(0, Math.round((audio.currentTime || 0) * 1000)),
@@ -327,7 +343,7 @@
     if (action === 'clear') {
       releaseAudio();
       generation++; pendingSeek = null; desiredPlaying = false; resumePending = false; seekingPlayback = false; changingSource = true; audio.pause(); audio.removeAttribute('src'); queue = []; index = -1; changingSource = false;
-      await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted, report_sequence: ++reportSequence });
+      await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted, report_sequence: nextReportSequence() });
       return;
     }
     if (action === 'song' || action === 'queue') {
@@ -351,6 +367,7 @@
       if (!Number.isInteger(index)) throw new Error('Invalid queue position.');
       preparingTrack = true;
       await publish(true);
+      if (!owns() || generation !== requestedGeneration) return;
       await start(index);
       if (owns() && queue === resolved && queue.length === 1 && !payload.playlist_id && !payload.collection && payload.radio !== false) seedRadio(queue[index].video_id);
     } else if (action === 'play') {
@@ -407,7 +424,7 @@
       if (at < index) index--;
       if (!queue.length) {
         desiredPlaying = false; audio.pause(); audio.removeAttribute('src'); index = -1;
-        await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted, report_sequence: ++reportSequence });
+        await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted, report_sequence: nextReportSequence() });
         return;
       }
       if (index >= queue.length) index = queue.length - 1;
