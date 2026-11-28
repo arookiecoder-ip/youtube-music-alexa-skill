@@ -19,8 +19,9 @@ def app_origin():
     state={'timer':0,'requests':[]}
     @app.route('/alexa/<path:path>',methods=['GET','POST'])
     def alexa(path):
-        if path.rstrip('/')=='init': return jsonify(logged_in=True, authenticated=True, devices=[{'serialNumber':'echo','accountName':'Living room'}],serial='echo')
-        if path.rstrip('/')=='status': return jsonify(logged_in=True)
+        if path.rstrip('/')=='init': return jsonify(status={'configured':True,'logged_in':True},logged_in=True,authenticated=True,devices=[{'serial':'echo','name':'Living room','online':True}],serial='echo')
+        if path.rstrip('/')=='status': return jsonify(configured=True,logged_in=True)
+        if path.rstrip('/')=='devices': return jsonify(devices=[{'serial':'echo','name':'Living room','online':True}])
         if path.rstrip('/')=='now_playing': return jsonify(video_id='AAAAAAAAAAA',title='Night drive',artist='The test band',playing=False,queue=[],position_ms=2000,duration_ms=200000,playback_confirmed=True)
         return jsonify(ok=True,devices=[])
     @app.route('/api/<path:path>',methods=['GET','POST','DELETE'])
@@ -34,7 +35,7 @@ def app_origin():
         if path.rstrip('/')=='home': return jsonify(schemaVersion=2,shelves=[])
         if path.rstrip('/')=='library': return jsonify(playlists=[{'playlistId':'PLfixture','title':'My playlist','count':4}],albums=[{'browseId':'MPREfixture','title':'Saved album'}])
         if path.rstrip('/')=='liked_songs': return jsonify(liked_songs=[])
-        if path.rstrip('/')=='profile_status': return jsonify(authenticated=True,alexa_logged_in=True)
+        if path.rstrip('/')=='profile_status': return jsonify(authenticated=True,alexa_logged_in=True,alexa_access_enabled=True,amazon_connected=True)
         return jsonify(ok=True,artists=[],tracks=[],songs=[],results=[],playlists=[])
     @app.get('/audio/')
     def audio():
@@ -189,5 +190,62 @@ def test_lyrics_scroll_and_romanize_preserves_timing(app_origin):
         expect(page.locator('.np-lyric-line.current')).to_have_text(page.locator('.np-lyric-line').nth(20).inner_text())
         page.get_by_role('button',name='Show original lyrics').click()
         expect(first).to_have_text('नमस्ते दुनिया 0')
+        page.screenshot(path='/tmp/musicbox-lyrics-updated.png',animations='disabled')
         assert not errors,errors
+        browser.close()
+
+
+def test_lyrics_uses_real_playback_clock_seek_and_loading_icon(app_origin):
+    origin,_=app_origin
+    with sync_playwright() as driver:
+        browser=driver.chromium.launch()
+        page=browser.new_page(viewport={'width':1440,'height':900})
+        seeks=[]; errors=[]
+        page.on('pageerror',lambda error:errors.append(str(error)))
+        page.route('**/api/track/AAAAAAAAAAA/lyrics',lambda route:route.fulfill(json={
+            'available':True,'text':'नमस्ते दुनिया','lines':[
+                {'text':'नमस्ते दुनिया','start_ms':0},{'text':'मेरी जान','start_ms':1000}]}))
+        def seek(route):
+            seeks.append(route.request.post_data_json)
+            route.fulfill(json={'ok':True,'paused':True})
+        page.route('**/alexa/seek/',seek)
+        echo={'serial':'echo','name':'Echo','online':True}
+        page.route('**/alexa/init/**',lambda route:route.fulfill(json={'status':{'configured':True,'logged_in':True},'devices':[echo],'serial':'echo'}))
+        page.route('**/alexa/devices/**',lambda route:route.fulfill(json={'devices':[echo]}))
+        # Serve the actual vendor file while exercising its lazy loading path.
+        page.route('**/vendor/sanscript-1.3.3.js?*',lambda route:route.fulfill(
+            body=(ROOT/'templates/static/vendor/sanscript-1.3.3.js').read_text(),content_type='text/javascript'))
+        page.goto(origin+'/home')
+        page.wait_for_function("typeof window.navigateTo === 'function' && document.querySelector('#device option[value=echo]')")
+        page.evaluate("""() => {
+            __appState._currentTrack={video_id:'AAAAAAAAAAA',title:'Test'};
+            __appState._hasTrack=true;__appState._currentVideoId='AAAAAAAAAAA';
+            dispatchEvent(new CustomEvent('musicbox:track')); openNowPlayingOverlay();
+            _applyDevices([{serial:'echo',name:'Echo',online:true}], 'echo');
+            progress.resetPending('AAAAAAAAAAA');
+            __appState.isPlaying=true;
+            progress.update({video_id:'AAAAAAAAAAA',title:'Test',playing:true,playback_confirmed:true,
+                playback_processing:false,position_ms:0,duration_ms:200000,started_at:Date.now()/1000});
+        }""")
+        page.locator('#np-tab-lyrics').click()
+        expect(page.locator('.np-lyric-line.current')).to_have_text('मेरी जान',timeout=5000)
+        with page.expect_response('**/alexa/seek/'):
+            page.locator('.np-lyric-line').first.click()
+        page.wait_for_function('progress.livePosition() < 1000')
+        assert seeks and seeks[-1]['position_ms']==0
+        assert seeks[-1]['video_id']=='AAAAAAAAAAA'
+        toggle=page.get_by_role('button',name='Show lyrics in English letters')
+        assert toggle.inner_text()==''
+        assert toggle.evaluate('el=>getComputedStyle(el).borderRadius')=='50%'
+        assert toggle.evaluate("el=>!!el.closest('#np-lyrics-panel')")
+        toggle.click()
+        expect(toggle).to_have_attribute('aria-busy','true')
+        expect(toggle.locator('.romanize-spinner')).to_be_visible()
+        expect(page.locator('#np-romanize')).not_to_have_attribute('aria-busy','true')
+        expect(page.locator('#np-romanize')).to_have_attribute('aria-pressed','true')
+        with page.expect_response('**/alexa/seek/'):
+            page.locator('.np-lyric-line').nth(1).click()
+        page.wait_for_function('progress.livePosition() >= 1000')
+        assert seeks[-1]['position_ms']==1000
+        assert not errors, errors
         browser.close()

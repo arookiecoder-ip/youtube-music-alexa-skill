@@ -51,9 +51,12 @@
     return romanizerLoading;
   }
   romanizeButton.onclick = async () => {
-    const request = revision;
+    const request = revision, busySince = performance.now();
     romanizeButton.disabled = true; romanizeButton.setAttribute('aria-busy','true');
     try {
+      // Paint the spinner before cached or local conversion begins.
+      await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      if (request !== revision) return;
       if (!romanized) {
         const engine = await loadRomanizer();
         if (request !== revision) return;
@@ -65,15 +68,17 @@
           return result;
         });
       }
+      await new Promise(resolve => setTimeout(resolve, Math.max(0, 220 - (performance.now() - busySince))));
       if (request !== revision) return;
       showingRomanized = !showingRomanized;
       const text = showingRomanized ? romanized : originals;
       [...lines.children].forEach((line,index) => { line.textContent=text[index]; });
       romanizeButton.setAttribute('aria-pressed',String(showingRomanized));
-      romanizeButton.textContent = showingRomanized ? 'Original' : 'Romanize';
+      romanizeButton.title = showingRomanized ? 'Show original lyrics' : 'Show words in English letters';
       romanizeButton.setAttribute('aria-label', showingRomanized ? 'Show original lyrics' : 'Show lyrics in English letters');
     } catch (error) { window.toast?.(error.message, 'error'); }
     finally {
+      await new Promise(resolve => setTimeout(resolve, Math.max(0, 220 - (performance.now() - busySince))));
       if (request === revision) { romanizeButton.disabled=false; romanizeButton.removeAttribute('aria-busy'); }
     }
   };
@@ -83,7 +88,7 @@
     const text = typeof result.text === 'string' ? result.text : '';
     const content = timed.length ? timed.map(line => line.text) : text.split('\n').filter(Boolean);
     originals = content; romanized = null; showingRomanized = false;
-    romanizeButton.textContent = 'Romanize'; romanizeButton.setAttribute('aria-pressed','false');
+    romanizeButton.setAttribute('aria-pressed','false');
     romanizeButton.removeAttribute('aria-busy');
     romanizeButton.setAttribute('aria-label','Show lyrics in English letters');
     romanizeButton.disabled = !content.some(supportsRomanization);

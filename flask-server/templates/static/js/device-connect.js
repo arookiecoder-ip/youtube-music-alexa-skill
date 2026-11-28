@@ -35,13 +35,14 @@
     echoDevices = document.body.dataset.alexaEnabled === 'false' ? [] : devices.filter(d => !String(d.serial).startsWith('mobile:'));
     const browser = window.browserPlayback;
     const local = browser ? 'mobile:' + browser.id : '';
-    const devicesWithPhones = echoDevices.filter(d => d.online && (!d.logged_out || (output && output.playback_output === 'alexa' && output.output_serial === d.serial))).concat(phones.map(d => ({ serial: 'mobile:' + d.id,
-      name: browser && d.id === browser.id ? 'This browser' : d.name, online: true })));
-    if (local && (!browser.available || browser.available()) && !devicesWithPhones.some(d => d.serial === local)) {
-      devicesWithPhones.push({ serial: local, name: 'This browser', online: true });
-    }
     const active = output && (output.playback_output === 'phone' && output.output_owner
       ? 'mobile:' + output.output_owner : output.output_serial);
+    const devicesWithPhones = echoDevices.filter(d => d.online && (!d.logged_out || (output && output.playback_output === 'alexa' && output.output_serial === d.serial))).concat(phones.map(d => ({ serial: 'mobile:' + d.id,
+      name: browser && d.id === browser.id ? 'This browser' : d.name, online: true })));
+    if (local && (active === local || !browser.available || browser.available()) && !devicesWithPhones.some(d => d.serial === local)) {
+      devicesWithPhones.push({ serial: local, name: 'This browser', online: true });
+    }
+
     const available = serial => devicesWithPhones.some(d => d.serial === serial && d.online);
     const orphan = output && output.playback_output === 'phone' &&
       (!output.output_owner || !phones.some(d => d.id === output.output_owner));
@@ -66,9 +67,14 @@
   window.mobileOutputSelected = function (np) {
     return np.playback_output === 'phone' && select.value === 'mobile:' + np.output_owner;
   };
+  function olderOutput(snapshot) {
+    return !!(output && snapshot && snapshot.output_epoch && snapshot.output_epoch === output.output_epoch &&
+      Number.isFinite(snapshot.output_revision) && Number.isFinite(output.output_revision) &&
+      snapshot.output_revision < output.output_revision);
+  }
   window.observeSharedOutput = function (np) {
     if (!np || !np.output_token) return;
-    if (output && np.output_epoch && np.output_epoch === output.output_epoch && np.output_revision < output.output_revision) return false;
+    if (olderOutput(np)) return false;
     if (np.queue_version !== undefined) window._mobileQueueVersion = np.queue_version;
     const changed = !output || output.output_token !== np.output_token;
     if (changed && !presentation && (np.handoff_pending || np.playback_processing)) {
@@ -132,7 +138,7 @@
     try {
       const latest = await rawApi('/api/app/devices/');
       phones = latest.devices || [];
-      if (!switching) {
+      if (!switching && !olderOutput(latest)) {
         if (output && latest.output_token !== output.output_token && latest.handoff_pending) {
           beginHandoffFeedback(latest.playback_output === 'phone' ? 'mobile:' + latest.output_owner : latest.output_serial);
         }

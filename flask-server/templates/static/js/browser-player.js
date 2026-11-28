@@ -93,6 +93,23 @@
   const ownSerial = 'mobile:' + id;
   const owns = () => !stopped && !!output && output.playback_output === 'phone' && output.output_owner === id &&
     !output.handoff_pending && accepted === output.output_token && Date.now() < leaseUntil;
+  let closeGuardAttached = false;
+  function localAudioIsPlaying() {
+    return owns() && desiredPlaying && !audio.paused && !audio.ended && !audio.error &&
+      !!queue[index] && mediaVideoId === queue[index].video_id && !!audio.src && !audio.src.startsWith('data:');
+  }
+  function confirmPlaybackClose(event) {
+    if (!localAudioIsPlaying()) { syncCloseProtection(); return; }
+    event.preventDefault();
+    event.returnValue = '';
+  }
+  function syncCloseProtection() {
+    const needed = localAudioIsPlaying();
+    if (needed === closeGuardAttached) return;
+    closeGuardAttached = needed;
+    if (needed) window.addEventListener('beforeunload', confirmPlaybackClose);
+    else window.removeEventListener('beforeunload', confirmPlaybackClose);
+  }
   const track = item => ({
     video_id: item.video_id || item.videoId || item.ytVideoId || '',
     title: item.title || '', artist: item.artist || '',
@@ -124,6 +141,7 @@
     audio.pause(); audio.removeAttribute('src');
     if (audio.load) audio.load();
     changingSource = false;
+    syncCloseProtection();
   }
   function recoverAudio() {
     if (stopped || !owns() || !desiredPlaying || !queue[index] || retryTimer !== null) return;
@@ -147,6 +165,7 @@
     publish().catch(() => {});
   }
   function publish(replace = false) {
+    syncCloseProtection();
     if (!owns() || !queue[index] || changingSource) return Promise.resolve();
     syncMediaSession();
     const token = accepted, capturedGeneration = generation;
@@ -490,7 +509,7 @@
         }
         if (Date.now() - lastReport > 4000) { lastReport = Date.now(); await publish(); }
       }
-    })().finally(() => { polling = null; });
+    })().finally(() => { polling = null; syncCloseProtection(); });
     return polling;
   }
   const controls = { '/alexa/play/': 'song', '/alexa/play_queue/': 'queue', '/alexa/seek/': 'seek',
@@ -559,6 +578,7 @@
   });
   // Independent safety clock: hung HTTP requests cannot extend audible ownership.
   const watchdog = setInterval(() => {
+    syncCloseProtection();
     if (!owns()) {
       leasePaused = desiredPlaying && !!accepted; cancelRecovery(); audio.pause();
       if (accepted && window.navigator && navigator.mediaSession) navigator.mediaSession.playbackState = 'paused';
@@ -588,6 +608,7 @@
     poll().then(() => { if (audio.error || resumePending) recoverAudio(); }).catch(() => {});
   });
   ['playing', 'pause', 'ended', 'error'].forEach(event => audio.addEventListener(event, publishAvailability));
+  ['play','playing','pause','ended','error','emptied'].forEach(event => audio.addEventListener(event, syncCloseProtection));
   window.addEventListener('pagehide', () => {
     const position = pendingSeek ? pendingSeek.position : Math.round((audio.currentTime || 0) * 1000);
     stopped = true; generation++; resumePending = false; desiredPlaying = false; releaseAudio(); clearInterval(watchdog);

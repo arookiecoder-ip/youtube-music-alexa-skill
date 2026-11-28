@@ -38,6 +38,7 @@ jobs:
         run: |
           node flask-server/tests/test_browser_player.js
           node flask-server/tests/test_browser_identity.js
+          node flask-server/tests/test_device_connect.js
           node flask-server/tests/test_pause_progress_confirmation.js
       - name: Resolver language selection and timeout recovery regressions
         working-directory: flask-server/youtube-stream

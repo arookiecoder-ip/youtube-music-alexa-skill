@@ -53,7 +53,7 @@ class BrowserLyricsTests(TestCase):
         import json
         provider=mock.Mock()
         provider.get_watch_playlist.return_value={'lyrics':'browse','tracks':[
-            {'videoId':'AAAAAAAAAAA','title':'Song','artists':[{'name':'Artist'}],'duration':'3:00'}]}
+            {'videoId':'AAAAAAAAAAA','title':'Song','artists':[{'name':'Artist'}],'length':'3:00'}]}
         provider.get_lyrics.return_value={'lyrics':'Plain lyrics'}
         response=mock.MagicMock(status_code=200)
         response.__enter__.return_value=response

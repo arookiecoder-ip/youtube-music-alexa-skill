@@ -62,3 +62,40 @@ def test_network_failure_recovers_and_clear_releases_media():
         page.evaluate("browserPlayback.execute('clear', {})")
         page.wait_for_function('!browserPlayback.audio.src && browserPlayback.audio.readyState === 0')
         browser.close()
+
+
+def test_active_browser_audio_confirms_leave_and_pause_removes_confirmation():
+    fixture=io.BytesIO()
+    with wave.open(fixture,'wb') as sound:
+        sound.setnchannels(1);sound.setsampwidth(2);sound.setframerate(8000);sound.writeframes(b'\0\0'*160000)
+    with sync_playwright() as driver:
+        browser=driver.chromium.launch()
+        page=browser.new_page(); dialogs=[]
+        page.route('https://musicbox.test/',lambda route:route.fulfill(body='<button id="play">Play</button><a id="leave" href="/next">Leave</a>'))
+        page.route('https://musicbox.test/next',lambda route:route.fulfill(body='Next page'))
+        page.route('https://musicbox.test/audio/**',lambda route:route.fulfill(content_type='audio/wav',body=fixture.getvalue()))
+        page.goto('https://musicbox.test/')
+        page.evaluate('''() => {
+            window.owner='';
+            window.api=async()=>({playback_output:'phone',output_owner:owner,output_token:'lease',phone_lease_ms:60000,handoff_pending:false,commands:[]});
+            window.browserAudioUrl=id=>'/audio/?video_id='+id;
+        }''')
+        page.add_script_tag(path=str(SOURCE))
+        page.evaluate('''() => { document.getElementById('play').onclick=async()=>{
+            window.owner=browserPlayback.id;await browserPlayback.poll();
+            await browserPlayback.execute('queue',{queue_items:[{video_id:'AAAAAAAAAAA',title:'Fixture'}]});
+        }; }''')
+        page.locator('#play').click()
+        page.wait_for_function('!browserPlayback.audio.paused && browserPlayback.audio.currentTime>0.05')
+        def dismiss(dialog):
+            dialogs.append(dialog.type);dialog.dismiss()
+        page.on('dialog',dismiss)
+        page.locator('#leave').click()
+        assert dialogs==['beforeunload']
+        assert page.url=='https://musicbox.test/'
+        assert not page.evaluate('browserPlayback.audio.paused')
+        page.evaluate("browserPlayback.execute('pause',{})")
+        page.locator('#leave').click()
+        page.wait_for_url('https://musicbox.test/next')
+        assert dialogs==['beforeunload'], 'Paused playback must allow navigation without another confirmation'
+        browser.close()

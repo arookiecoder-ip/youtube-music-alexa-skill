@@ -34,7 +34,7 @@ async function main() {
     if (url === '/api/app/queue/' && reportGate) await reportGate;
     return {ok: true};
   };
-  const window = { api, crypto: {}, Audio: function () { return audio; }, addEventListener(name, handler) { windowEvents[name] = handler; },
+  const window = { api, crypto: {}, removeEventListener(name, handler) { if (windowEvents[name] === handler) delete windowEvents[name]; }, Audio: function () { return audio; }, addEventListener(name, handler) { windowEvents[name] = handler; },
     navigator:{mediaSession}, MediaMetadata:class { constructor(value) { Object.assign(this,value); } },
     browserAudioUrl: id => '/audio/?video_id=' + id + '&wait=1' };
   const context = { window, Audio: window.Audio, crypto: { randomUUID: () => 'id' + (++sequence) },
@@ -47,12 +47,16 @@ async function main() {
   const player = window.browserPlayback;
   await player.poll();
   assert(player.owns());
+  const closeBlocked = () => { let blocked=false; const event={preventDefault(){blocked=true;},returnValue:undefined}; windowEvents.beforeunload?.(event); return blocked; };
+  assert(!closeBlocked(), 'Idle browser must not warn on close');
   await window.api('/alexa/command/', {action: 'volume', value: 35});
   assert.equal(audio.volume, 0.35);
   assert.equal((await window.api('/alexa/volume/?serial=mobile:browser-id1')).volume, 35);
   await player.execute('queue', {queue_items: [{video_id: 'AAAAAAAAAAA'}, {video_id: 'BBBBBBBBBBB'}]});
   assert.equal(audio.src, '/audio/?video_id=AAAAAAAAAAA&wait=1');
   assert.equal(audio.paused, false);
+  assert(closeBlocked(), 'Active browser music must warn before close or reload');
+  audio.volume=0; assert(closeBlocked(), 'Muted playback still has an active session');
   assert.equal(mediaSession.metadata.title, 'AAAAAAAAAAA');
   assert.equal(mediaSession.playbackState, 'playing');
   let releasePresence;
@@ -92,6 +96,7 @@ async function main() {
   await player.execute('seek', {position_ms: 6000});
   assert.equal(audio.currentTime, 6);
   assert(audio.paused, 'Seeking while paused must not resume playback');
+  assert(!windowEvents.beforeunload, 'Pause must remove the close listener');
   await player.execute('seek', {position_ms: 999999});
   assert.equal(audio.currentTime, 19, 'Seek must stop before EOF instead of advancing the queue');
   const oldInstance = calls.filter(call => call.url === '/api/app/queue/').at(-1).body.playback_instance;
@@ -228,6 +233,7 @@ async function main() {
   commands = [];
   now += 17000; timers[0]();
   assert.equal(audio.paused, true, 'Expired lease must stop sound without an HTTP response');
+  assert(!closeBlocked(), 'An expired ownership lease must never block closing');
   await assert.rejects(player.execute('play', {}), /no longer owns/);
   await player.poll();
   assert(player.owns());
@@ -239,6 +245,7 @@ async function main() {
   failAckOnce = true;
   await assert.rejects(player.poll(), /connection lost/);
   assert(audio.paused && !player.owns(), 'Failed acknowledgement must keep the old source silent');
+  assert(!windowEvents.beforeunload, 'Handoff must remove the browser close listener');
   await player.poll();
   assert.equal(calls.filter(call => call.url === '/api/app/output/' && call.body.action === 'ack').at(-1).body.playing, true,
     'Handoff acknowledgment must preserve the pre-stop play intent even after the watchdog pauses audio');
@@ -302,6 +309,7 @@ async function main() {
   events.error.forEach(fn => fn()); await fireRetry(4000);
   events.error.forEach(fn => fn()); await flush();
   assert(audio.paused, 'Repeated failures must stop after three attempts');
+  assert(!closeBlocked(), 'Terminal audio failure must allow closing');
   assert(![...timeouts.values()].some(timer => [1000,2000,4000].includes(timer.delay)), 'Retries must be bounded');
   audio.error = null;
   await player.execute('play', {});
@@ -323,10 +331,12 @@ async function main() {
   assert(![...timeouts.values()].some(timer => timer.delay === 1000), 'Autoplay denial must not retry automatically');
   audio.play = normalPlay;
   await mediaHandlers.play(); await flush();
+  assert(closeBlocked(), 'Resuming local playback restores close protection');
   await mediaHandlers.seekto({seekTime:8});
   assert.equal(audio.currentTime, 8, 'System media controls must seek the browser audio');
   await mediaHandlers.pause();
   assert(audio.paused, 'System media controls must honor Pause');
+  assert(!windowEvents.beforeunload, 'Headset or lock-screen Pause removes close protection');
   windowEvents.pagehide();
   assert.equal(audio.src, '', 'Unload must release buffered media');
   assert(audio.loads > 0);

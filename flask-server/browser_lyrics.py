@@ -47,8 +47,13 @@ def synced_fallback(video, provider, playlist):
         artists = metadata.get('artists')
         artist = metadata.get('author') or (artists[0].get('name') if isinstance(artists, list) and artists and isinstance(artists[0], dict) else '')
         duration = metadata.get('lengthSeconds') or metadata.get('duration_seconds')
-        if not duration and isinstance(metadata.get('duration'), str):
-            duration = sum(int(part) * 60 ** i for i, part in enumerate(reversed(metadata['duration'].split(':'))))
+        clock = metadata.get('length') or metadata.get('duration')
+        if not duration and isinstance(clock, str):
+            duration = sum(int(part) * 60 ** i for i, part in enumerate(reversed(clock.split(':'))))
+        if not duration:
+            song = provider.get_song(video)
+            details = song.get('videoDetails', {}) if isinstance(song, dict) else {}
+            duration = details.get('lengthSeconds')
         duration = float(duration or 0)
         if not title or not artist or not math.isfinite(duration) or duration <= 0:
             return None
