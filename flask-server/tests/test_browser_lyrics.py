@@ -48,3 +48,32 @@ class BrowserLyricsTests(TestCase):
         provider.get_watch_playlist.return_value={'lyrics':'browse'}
         provider.get_lyrics.side_effect=[None,{'lyrics':'Plain lyrics'}]
         self.assertEqual(BrowserLyrics().get('alice','AAAAAAAAAAA',provider)['text'],'Plain lyrics')
+
+    def test_exact_recording_fallback_adds_real_timestamps(self):
+        import json
+        provider=mock.Mock()
+        provider.get_watch_playlist.return_value={'lyrics':'browse','tracks':[
+            {'videoId':'AAAAAAAAAAA','title':'Song','artists':[{'name':'Artist'}],'duration':'3:00'}]}
+        provider.get_lyrics.return_value={'lyrics':'Plain lyrics'}
+        response=mock.MagicMock(status_code=200)
+        response.__enter__.return_value=response
+        response.iter_content.return_value=[json.dumps({'duration':180,'syncedLyrics':'[00:01.25]First\n[00:04.500]Second'}).encode()]
+        with mock.patch('browser_lyrics.requests.get',return_value=response) as get:
+            result=BrowserLyrics().get('alice','AAAAAAAAAAA',provider)
+        self.assertEqual(result['lines'],[{'text':'First','start_ms':1250},{'text':'Second','start_ms':4500}])
+        self.assertEqual(result['source'],'LRCLIB')
+        self.assertEqual(get.call_args.kwargs['params'],{'track_name':'Song','artist_name':'Artist','duration':180})
+
+    def test_wrong_duration_or_failed_timing_source_preserves_plain_lyrics(self):
+        import json
+        provider=mock.Mock()
+        provider.get_watch_playlist.return_value={'lyrics':'browse'}
+        provider.get_lyrics.return_value={'lyrics':'Plain lyrics'}
+        provider.get_song.return_value={'videoDetails':{'title':'Song','author':'Artist','lengthSeconds':'180'}}
+        response=mock.MagicMock(status_code=200)
+        response.__enter__.return_value=response
+        response.iter_content.return_value=[json.dumps({'duration':220,'syncedLyrics':'[00:01.25]Wrong recording'}).encode()]
+        with mock.patch('browser_lyrics.requests.get',return_value=response):
+            self.assertEqual(BrowserLyrics().get('alice','AAAAAAAAAAA',provider)['text'],'Plain lyrics')
+        with mock.patch('browser_lyrics.requests.get',side_effect=TimeoutError):
+            self.assertEqual(BrowserLyrics().get('alice','AAAAAAAAAAA',provider)['text'],'Plain lyrics')

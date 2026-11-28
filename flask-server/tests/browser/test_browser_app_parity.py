@@ -71,11 +71,23 @@ def test_optional_language_menu(app_origin,width):
                 dispatchEvent(new CustomEvent('musicbox:track'));
                 openNowPlayingOverlay();
                 document.getElementById('progress-track').setAttribute('aria-valuenow','2');
+                window.progress.livePosition=()=>2000;
             }""")
             lyrics=page.locator('#np-tab-lyrics')
             expect(lyrics).to_be_enabled()
             lyrics.click()
             expect(page.locator('#np-lyrics-panel')).to_be_visible()
+            expect(page.locator('.np-lyric-line.current')).to_have_text('Next line')
+            page.evaluate("""() => {
+                window.lyricSeeks=[];
+                window.progress.seekTo=async ms=>{lyricSeeks.push(ms);window.progress.livePosition=()=>ms;};
+            }""")
+            page.locator('#np-lyrics-lines button').filter(has_text='First line').click()
+            assert page.evaluate('lyricSeeks')==[0]
+            expect(page.locator('.np-lyric-line.current')).to_have_text('First line')
+            page.locator('#np-lyrics-lines button').filter(has_text='Next line').focus()
+            page.keyboard.press('Enter')
+            assert page.evaluate('lyricSeeks')==[0,1000]
             expect(page.locator('.np-lyric-line.current')).to_have_text('Next line')
             expect(page.locator('#np-lyrics-lines')).not_to_contain_text('0:01')
             page.locator('#np-tab-queue').click()

@@ -31,10 +31,24 @@
     const content = timed.length ? timed.map(line => line.text) : text.split('\n').filter(Boolean);
     tab.disabled = !content.some(line => typeof line === 'string' && line.trim());
     tab.title = tab.disabled ? 'Lyrics unavailable for this song' : 'Show lyrics';
-    $('np-lyrics-credit').textContent = result.source || '';
+    $('np-lyrics-credit').textContent = [!timed.length && 'Synced timing is unavailable for this song.', result.source].filter(Boolean).join(' · ');
     if (tab.disabled) { select(false); return; }
     const fragment = document.createDocumentFragment();
-    content.forEach(text => { const line = document.createElement('p'); line.className = 'np-lyric-line'; line.textContent = text; fragment.append(line); });
+    content.forEach((text, index) => {
+      const line = document.createElement(timed.length ? 'button' : 'p');
+      line.className = 'np-lyric-line'; line.textContent = text;
+      if (timed.length) {
+        line.type = 'button'; line.title = 'Play from this line';
+        const lineVideo = video;
+        line.onclick = async () => {
+          if (lineVideo !== video || !window.progress?.seekTo) return;
+          followAfter = 0;
+          await window.progress.seekTo(timed[index].start_ms);
+          tick();
+        };
+      }
+      fragment.append(line);
+    });
     lines.append(fragment); panel.classList.toggle('untimed', !timed.length);
     panel.scrollTop = 0;
     tick();
@@ -55,13 +69,13 @@
   function tick() {
     if (!selected || document.hidden || !data?.lines?.length) return;
     const local = window.browserPlayback;
-    const position = local?.owns() ? local.audio.currentTime * 1000 : Number($('progress-track')?.getAttribute('aria-valuenow') || 0) * 1000;
+    const position = local?.owns() ? local.audio.currentTime * 1000 : window.progress?.livePosition ? window.progress.livePosition() : Number($('progress-track')?.getAttribute('aria-valuenow') || 0) * 1000;
     let next = -1;
     for (let i = 0; i < data.lines.length; i++) { if (position >= data.lines[i].start_ms) next = i; else break; }
     if (next !== active) {
-      if (lines.children[active]) lines.children[active].classList.remove('current');
+      if (lines.children[active]) { lines.children[active].classList.remove('current'); lines.children[active].removeAttribute('aria-current'); }
       active = next;
-      if (lines.children[active]) lines.children[active].classList.add('current');
+      if (lines.children[active]) { lines.children[active].classList.add('current'); lines.children[active].setAttribute('aria-current','true'); }
     }
     const line = lines.children[active];
     if (line && performance.now() >= followAfter) {

@@ -1225,7 +1225,13 @@ const progress = window.progress = (function () {
     paint();
   }
 
-  return { update, resetPending, cancelPending, setPausePending, setPlayPending, livePosition, getDuration: () => durationMs, syncLoop };
+  function seekTo(position) {
+    if (!Number.isFinite(position) || position < 0 || !activeVideoId) return Promise.resolve();
+    dragMs = Math.min(seekLimitMs(), Math.round(position));
+    dragging = true;
+    return endDrag();
+  }
+  return { update, resetPending, cancelPending, setPausePending, setPlayPending, livePosition, seekTo, getDuration: () => durationMs, syncLoop };
 })();
 
 /* ---- API ---- */

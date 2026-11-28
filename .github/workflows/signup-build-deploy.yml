@@ -38,13 +38,14 @@ jobs:
         run: |
           node flask-server/tests/test_browser_player.js
           node flask-server/tests/test_browser_identity.js
+          node flask-server/tests/test_pause_progress_confirmation.js
       - name: Resolver language selection and timeout recovery regressions
         working-directory: flask-server/youtube-stream
         run: npm ci --ignore-scripts && npm test
       - name: Podcast relay, downloads, session rotation and admin error email
         env:
           PYTHONPATH: flask-server:flask-server/tests
-        run: python -m unittest test_youtube_stream test_youtube_stream_routes test_current_audio_routes test_audio_credentials test_browser_device_sessions test_error_alerts -q
+        run: python -m unittest test_youtube_stream test_youtube_stream_routes test_current_audio_routes test_audio_credentials test_browser_device_sessions test_browser_lyrics test_error_alerts -q
       - name: Jam membership recovery and ownership regressions
         env:
           PYTHONPATH: flask-server:flask-server/tests

@@ -192,6 +192,9 @@ function main() {
     check(browser ? 'browser seeking keeps playback controls free of a loading animation' :
       'Alexa seeking still waits for device confirmation', local.state.playbackProcessing, !browser);
     checkTrue('seek immediately updates the displayed position', local.progress.livePosition() >= 6000);
+    local.progress.seekTo(12500);
+    checkTrue('lyric seek uses the shared seek path at the requested timestamp', local.progress.livePosition() >= 12500);
+    check(browser ? 'lyric seek preserves browser playback' : 'lyric seek awaits Alexa confirmation', local.state.playbackProcessing, !browser);
   }
   console.log(`\npause-progress-confirmation: passed=${passed} failed=${failed}`);
   process.exit(failed ? 1 : 0);
