@@ -1,22 +1,3 @@
-<dialog class="app-sheet" id="app-timer-dialog" aria-labelledby="app-timer-title">
-  <div class="app-sheet-heading"><h2 id="app-timer-title">Sleep timer</h2><button data-close-dialog aria-label="Close sleep timer">✕</button></div>
-  <span id="app-timer-badge" hidden></span>
-  <p id="app-timer-status" role="status">Stop playback after a set time.</p>
-  <form id="app-timer-form"><div class="app-timer-presets">{% for minutes in [5,15,30,45,60,90] %}<button type="button" data-timer-minutes="{{ minutes }}">{{ minutes }} min</button>{% endfor %}</div>
-    <label class="app-field">Custom timer (1–180 minutes)<input id="app-timer-minutes" type="number" min="1" max="180" value="30" required></label>
-    <button class="app-primary" type="submit">Set timer</button><button type="button" data-app-action="cancel-timer">Cancel timer</button>
-  </form>
-</dialog>
-<dialog class="app-sheet" id="app-lyrics-dialog" aria-labelledby="app-lyrics-title">
-  <div class="app-sheet-heading"><h2 id="app-lyrics-title">Lyrics</h2><button data-close-dialog aria-label="Close lyrics">✕</button></div>
-  <p id="app-lyrics-track"></p><div class="app-lyrics-body" id="app-lyrics-body" aria-live="polite">Choose a song to see lyrics.</div>
-  <p class="app-note" id="app-lyrics-source"></p>
-  <button data-app-action="refresh-lyrics">Refresh lyrics</button>
-</dialog>
-<dialog class="app-sheet" id="app-devices-dialog" aria-labelledby="app-devices-title">
-  <div class="app-sheet-heading"><h2 id="app-devices-title">Play on</h2><button data-close-dialog aria-label="Close devices">✕</button></div>
-  <p>Choose where your music plays.</p><div id="app-device-list"></div><button data-app-action="refresh-devices">Refresh devices</button>
-</dialog>
 <dialog class="app-sheet" id="app-language-dialog" aria-labelledby="app-language-title">
   <div class="app-sheet-heading"><h2 id="app-language-title">Audio language</h2><button data-close-dialog aria-label="Close audio language">✕</button></div>
   <div id="app-language-list" aria-live="polite"></div>

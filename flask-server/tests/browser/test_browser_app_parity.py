@@ -55,33 +55,38 @@ def app_origin():
 
 
 @pytest.mark.parametrize('width',[390,820,1440])
-def test_features_preserve_browser_layout(app_origin,width):
-    origin,state=app_origin
+def test_optional_language_menu(app_origin,width):
+    origin,_=app_origin
     with sync_playwright() as driver:
         browser=driver.chromium.launch()
-        page=browser.new_page(viewport={'width':width,'height':900},accept_downloads=True)
+        page=browser.new_page(viewport={'width':width,'height':900})
         errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
         page.goto(origin+'/home')
         page.wait_for_function("typeof window.navigateTo === 'function'")
-        assert page.locator('.app-dock, #browser-settings-page, [data-pref]').count()==0
+        assert page.locator('#np-menu-like, [data-app-action="devices"], [data-app-action="lyrics"], [data-app-action="timer"], [data-app-action="download"]').count()==0
+        language=page.locator('[data-app-action="language"]')
+        expect(language).to_have_attribute('hidden','')
         page.evaluate("""() => {
-            __appState._currentTrack={video_id:'AAAAAAAAAAA',title:'Night drive',artist:'The test band'};
-            __appState._currentVideoId='AAAAAAAAAAA';__appState._hasTrack=true;
+            browserPlayback.owns=()=>true;
+            __appState._currentTrack={video_id:'AAAAAAAAAAA'};
             dispatchEvent(new CustomEvent('musicbox:track'));
-            openNowPlayingOverlay();
         }""")
-        def action(name):
-            page.locator('#np-more-menu').get_by_role('menuitem',name=name,exact=True,include_hidden=True).evaluate('el=>el.click()')
-        action('Sleep timer')
-        expect(page.get_by_role('dialog',name='Sleep timer')).to_be_visible()
-        page.get_by_label('Custom timer').fill('17')
-        page.get_by_role('button',name='Set timer',exact=True).click()
-        expect(page.get_by_role('dialog',name='Sleep timer')).not_to_be_visible()
-        assert state['timer']==17
-        action('Lyrics')
-        expect(page.locator('#app-lyrics-body')).to_contain_text('Next line')
-        page.get_by_role('button',name='Close lyrics',exact=True).click()
-        with page.expect_download() as download: action('Download')
-        assert download.value.suggested_filename=='Night drive.wav'
+        page.wait_for_timeout(200)
+        expect(language).to_have_attribute('hidden','')
+        page.route('**/audio/?**',lambda route:route.fulfill(json={'audio_tracks':[{'id':'en','display_name':'English'},{'id':'hi','display_name':'Hindi'}],'selected':'en'}))
+        page.evaluate("""() => {
+            __appState._currentTrack={video_id:'BBBBBBBBBBB'};
+            dispatchEvent(new CustomEvent('musicbox:track'));
+        }""")
+        expect(language).not_to_have_attribute('hidden','')
+        language.evaluate('el=>el.click()')
+        expect(page.get_by_role('dialog',name='Audio language')).to_be_visible()
+        expect(page.locator('#app-language-list button')).to_have_count(2)
+        page.get_by_role('button',name='Close audio language').click()
+        page.evaluate("""() => {
+            browserPlayback.owns=()=>false;
+            dispatchEvent(new CustomEvent('musicbox:track'));
+        }""")
+        expect(language).to_have_attribute('hidden','')
         assert not errors,errors
         browser.close()
