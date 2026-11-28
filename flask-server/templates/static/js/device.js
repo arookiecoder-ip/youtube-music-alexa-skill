@@ -68,6 +68,9 @@
     for (const opt of deviceEl.options) {
       const item = document.createElement('div');
       item.className = 'custom-select-option' + (opt.selected ? ' selected' : '');
+      // Keep focus inside the picker between pointerdown and click.
+      item.tabIndex = -1;
+      item.setAttribute('role', 'option');
       item.dataset.value = opt.value;
       item.classList.toggle('logged-out', opt.dataset.loggedOut === '1');
       const isOnline = opt.dataset.online !== '0';

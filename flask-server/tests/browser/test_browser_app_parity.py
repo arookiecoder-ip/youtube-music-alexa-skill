@@ -108,3 +108,35 @@ def test_optional_language_menu(app_origin,width):
         expect(language).to_have_attribute('hidden','')
         assert not errors,errors
         browser.close()
+
+
+def test_idle_device_dropdown_click(app_origin):
+    origin,_=app_origin
+    with sync_playwright() as driver:
+        browser=driver.chromium.launch()
+        page=browser.new_page(viewport={'width':1440,'height':900})
+        output={'playback_output':'alexa','output_serial':'echo','output_owner':'','output_token':'initial','devices':[]}
+        changes=[]; errors=[]
+        page.on('pageerror',lambda error:errors.append(str(error)))
+        def devices(route):
+            body=route.request.post_data_json if route.request.method=='POST' else None
+            if body and body.get('action')=='online':
+                output['devices']=[{'id':body['device_id'],'name':'Browser player'}]
+            if body and body.get('action')=='transfer':
+                changes.append(body)
+                output.update(playback_output='phone',output_owner=body['target_id'],output_token='selected')
+            route.fulfill(json=output)
+        page.route('**/api/app/devices/',devices)
+        page.route('**/alexa/init/**',lambda route:route.fulfill(json={'status':{'configured':True,'logged_in':True},'devices':[{'serial':'echo','name':"Jit's Echo Dot",'online':True}],'serial':'echo'}))
+        page.route('**/alexa/now_playing/**',lambda route:route.fulfill(json={**output,'playing':False,'queue':[],'video_id':''}))
+        page.goto(origin+'/home')
+        page.wait_for_function("document.querySelector('#device option[value^=\"mobile:\"]')")
+        page.locator('#device-trigger').click()
+        page.locator('#device-menu .custom-select-option').filter(has_text='This browser').click()
+        page.wait_for_timeout(500)
+        assert changes, 'Click should submit the device transfer'
+        assert not errors, errors
+        expect(page.locator('#device-trigger')).to_contain_text('This browser')
+        page.wait_for_timeout(2500)
+        expect(page.locator('#device-trigger')).to_contain_text('This browser')
+        browser.close()
