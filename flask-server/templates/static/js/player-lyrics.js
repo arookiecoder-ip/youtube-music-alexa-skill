@@ -50,7 +50,19 @@
     });
     return romanizerLoading;
   }
+  function showRomanized(enabled) {
+    showingRomanized = enabled;
+    const text = showingRomanized ? romanized : originals;
+    [...lines.children].forEach((line,index) => { line.textContent=text[index]; });
+    romanizeButton.setAttribute('aria-pressed',String(showingRomanized));
+    romanizeButton.title = showingRomanized ? 'Show original lyrics' : 'Show words in English letters';
+    romanizeButton.setAttribute('aria-label', showingRomanized ? 'Show original lyrics' : 'Show lyrics in English letters');
+  }
   romanizeButton.onclick = async () => {
+    if (showingRomanized) {
+      showRomanized(false);
+      return;
+    }
     const request = revision, busySince = performance.now();
     romanizeButton.disabled = true; romanizeButton.setAttribute('aria-busy','true');
     try {
@@ -70,15 +82,9 @@
       }
       await new Promise(resolve => setTimeout(resolve, Math.max(0, 220 - (performance.now() - busySince))));
       if (request !== revision) return;
-      showingRomanized = !showingRomanized;
-      const text = showingRomanized ? romanized : originals;
-      [...lines.children].forEach((line,index) => { line.textContent=text[index]; });
-      romanizeButton.setAttribute('aria-pressed',String(showingRomanized));
-      romanizeButton.title = showingRomanized ? 'Show original lyrics' : 'Show words in English letters';
-      romanizeButton.setAttribute('aria-label', showingRomanized ? 'Show original lyrics' : 'Show lyrics in English letters');
+      showRomanized(true);
     } catch (error) { window.toast?.(error.message, 'error'); }
     finally {
-      await new Promise(resolve => setTimeout(resolve, Math.max(0, 220 - (performance.now() - busySince))));
       if (request === revision) { romanizeButton.disabled=false; romanizeButton.removeAttribute('aria-busy'); }
     }
   };
@@ -107,8 +113,11 @@
         line.onclick = async () => {
           if (lineVideo !== video || !window.progress?.seekTo) return;
           followAfter = 0;
+          panel.classList.add('lyric-seek');
+          tick(timed[index].start_ms);
           await window.progress.seekTo(timed[index].start_ms);
           tick();
+          requestAnimationFrame(() => requestAnimationFrame(() => panel.classList.remove('lyric-seek')));
         };
       }
       fragment.append(line);
@@ -130,10 +139,10 @@
       paint(result);
     } catch (_) { if (request === revision) { tab.disabled = true; tab.title = 'Lyrics unavailable for this song'; } }
   }
-  function tick() {
+  function tick(seekPosition) {
     if (!selected || document.hidden || !data?.lines?.length) return;
     const local = window.browserPlayback;
-    const position = local?.owns() ? local.audio.currentTime * 1000 : window.progress?.livePosition ? window.progress.livePosition() : Number($('progress-track')?.getAttribute('aria-valuenow') || 0) * 1000;
+    const position = seekPosition ?? (local?.owns() ? local.audio.currentTime * 1000 : window.progress?.livePosition ? window.progress.livePosition() : Number($('progress-track')?.getAttribute('aria-valuenow') || 0) * 1000);
     let next = -1;
     for (let i = 0; i < data.lines.length; i++) { if (position >= data.lines[i].start_ms) next = i; else break; }
     if (next !== active) {
@@ -144,7 +153,7 @@
     const line = lines.children[active];
     if (line && performance.now() >= followAfter) {
       const target = Math.max(0, line.offsetTop - panel.clientHeight * .38);
-      if (Math.abs(panel.scrollTop - target) > 8) panel.scrollTo({top:target, behavior:reduced.matches ? 'instant' : 'smooth'});
+      if (Math.abs(panel.scrollTop - target) > 8) panel.scrollTo({top:target, behavior:reduced.matches || panel.classList.contains('lyric-seek') ? 'instant' : 'smooth'});
     }
   }
   const clock = setInterval(tick, 250);

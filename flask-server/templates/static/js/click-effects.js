@@ -56,6 +56,7 @@
   function createRipple(e, type) {
     var target = e.target.closest(selector);
     if (!target) return;
+    if (target.matches("button.np-lyric-line")) return;
 
     // Nested interactive credits (artist and album names) have their own
     // hover/active affordance and each navigates to a separate page. Rippling

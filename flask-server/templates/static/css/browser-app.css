@@ -42,7 +42,7 @@
 #np-lyrics-panel { position:relative; flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:24px; scroll-behavior:smooth; }
 #np-lyrics-lines { padding:12px 0 30%; animation:lyrics-enter .3s ease both; }
 .np-lyric-line { margin:0; padding:12px 6px; color:var(--muted); opacity:.55; font-size:clamp(18px,1.7vw,25px); font-weight:600; line-height:1.65; transform-origin:left center; transition:color .4s ease,opacity .4s ease,transform .4s ease; white-space:pre-wrap; }
-.np-lyric-line.current { color:var(--accent); opacity:1; transform:translateX(5px); }
+.np-lyric-line.current { opacity:1; }
 .untimed .np-lyric-line { opacity:.9; }
 #np-lyrics-credit { color:var(--muted); font-size:12px; line-height:1.5; }
 @keyframes lyrics-enter { from {opacity:0; transform:translateY(8px);} to {opacity:1; transform:translateY(0);} }
@@ -102,4 +102,7 @@
 
 #np-lyrics-lines .np-lyric-line,
 #np-lyrics-lines button.np-lyric-line { font-family:'MusicBox Lyrics',sans-serif; font-size:clamp(23px,2.05vw,32px); font-weight:600; line-height:1.65; letter-spacing:.005em; }
-#np-lyrics-lines .np-lyric-line.current { color:var(--accent); opacity:1; text-shadow:0 0 24px var(--accent-soft); }
+#np-lyrics-lines .np-lyric-line.current,
+#np-lyrics-lines button.np-lyric-line.current:hover { color:#fff; opacity:1; }
+
+#np-lyrics-panel.lyric-seek .np-lyric-line { transition:none; }
