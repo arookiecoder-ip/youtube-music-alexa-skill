@@ -106,3 +106,4 @@
 #np-lyrics-lines button.np-lyric-line.current:hover { color:#fff; opacity:1; }
 
 #np-lyrics-panel.lyric-seek .np-lyric-line { transition:none; }
+#np-lyrics-timing-note { margin: 0 50px 12px 6px; color: var(--muted); font-size: 13px; }

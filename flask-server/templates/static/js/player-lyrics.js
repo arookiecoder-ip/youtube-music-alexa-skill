@@ -19,7 +19,10 @@
     if (selected) followAfter = 0;
     if (selected) { active = -1; tick(); }
   }
-  tab.onclick = () => select(true); queueTab.onclick = () => select(false);
+  tab.onclick = () => {
+    select(true);
+    if (selected && !data?.lines?.length) refreshTiming();
+  }; queueTab.onclick = () => select(false);
   for (const button of [tab, queueTab]) button.addEventListener('keydown', event => {
     if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
     event.preventDefault();
@@ -101,7 +104,8 @@
     romanizeButton.title = romanizeButton.disabled ? 'English-letter conversion is not needed or unavailable for this script' : 'Show words in English letters';
     tab.disabled = !content.some(line => typeof line === 'string' && line.trim());
     tab.title = tab.disabled ? 'Lyrics unavailable for this song' : 'Show lyrics';
-    $('np-lyrics-credit').textContent = [!timed.length && 'Synced timing is unavailable for this song.', result.source].filter(Boolean).join(' · ');
+    $('np-lyrics-timing-note').hidden = timed.length > 0;
+    $('np-lyrics-credit').textContent = result.source || '';
     if (tab.disabled) { select(false); return; }
     const fragment = document.createDocumentFragment();
     content.forEach((text, index) => {
@@ -126,16 +130,30 @@
     panel.scrollTop = 0;
     tick();
   }
+  let timingRetryAt = 0;
+  async function refreshTiming() {
+    if (performance.now() < timingRetryAt) return;
+    timingRetryAt = performance.now() + 60000;
+    const request = revision;
+    try {
+      const result = await window.api('/api/track/' + encodeURIComponent(video) + '/lyrics');
+      if (request !== revision || !result.lines?.length) return;
+      cache.set(video, result);
+      paint(result);
+    } catch (_) { /* Keep the plain lyrics available. */ }
+  }
   async function trackChanged() {
     const next = window.__appState?._currentTrack?.video_id || '';
     if (next === video) return;
     video = next; const request = ++revision;
+    timingRetryAt = performance.now() + 60000;
     data = null; active = -1; tab.disabled = true; select(false); lines.replaceChildren();
     if (!video) return;
     try {
       const result = cache.get(video) || await window.api('/api/track/' + encodeURIComponent(video) + '/lyrics');
       if (request !== revision) return;
-      cache.set(video, result); if (cache.size > 20) cache.delete(cache.keys().next().value);
+      if (result.lines?.length) cache.set(video, result);
+      if (cache.size > 20) cache.delete(cache.keys().next().value);
       paint(result);
     } catch (_) { if (request === revision) { tab.disabled = true; tab.title = 'Lyrics unavailable for this song'; } }
   }
