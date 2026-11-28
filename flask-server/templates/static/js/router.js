@@ -230,7 +230,7 @@
   function _isQueueScrollTarget(target) {
     if (target && target.nodeType !== 1) target = target.parentElement;
     return !!(target && target.closest && target.closest(
-      '#np-queue-list, #queue-modal-body, .queue-modal-body, .queue-section'
+      '#np-queue-list, #np-lyrics-panel, #queue-modal-body, .queue-modal-body, .queue-section'
     ));
   }
   function _blockPlaybackBackgroundScroll(event) {

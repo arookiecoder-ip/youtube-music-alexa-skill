@@ -152,3 +152,42 @@ def test_idle_device_dropdown_click(app_origin):
         page.wait_for_timeout(2500)
         expect(page.locator('#device-trigger')).to_contain_text('This browser')
         browser.close()
+
+
+def test_lyrics_scroll_and_romanize_preserves_timing(app_origin):
+    origin,_=app_origin
+    with sync_playwright() as driver:
+        browser=driver.chromium.launch()
+        page=browser.new_page(viewport={'width':1440,'height':900})
+        errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
+        page.route('**/api/track/AAAAAAAAAAA/lyrics',lambda route:route.fulfill(json={
+            'available':True,'text':'नमस्ते दुनिया','source':'Fixture',
+            'lines':[{'text':'नमस्ते दुनिया '+str(i),'start_ms':i*1000} for i in range(40)]}))
+        page.goto(origin+'/home')
+        page.wait_for_function("typeof window.navigateTo === 'function'")
+        page.evaluate("""() => {
+            __appState._currentTrack={video_id:'AAAAAAAAAAA',title:'Test'};
+            __appState._hasTrack=true;__appState._currentVideoId='AAAAAAAAAAA';
+            dispatchEvent(new CustomEvent('musicbox:track')); openNowPlayingOverlay();
+            window.progress.livePosition=()=>0;
+            window.lyricSeeks=[];
+            window.progress.seekTo=async ms=>{lyricSeeks.push(ms);window.progress.livePosition=()=>ms;};
+        }""")
+        page.locator('#np-tab-lyrics').click()
+        panel=page.locator('#np-lyrics-panel')
+        panel.hover();page.mouse.wheel(0,650)
+        page.wait_for_function("document.getElementById('np-lyrics-panel').scrollTop > 100")
+        before=panel.evaluate('el=>el.scrollTop')
+        page.get_by_role('button',name='Show lyrics in English letters').click()
+        expect(page.locator('#np-romanize')).to_have_attribute('aria-pressed','true')
+        first=page.locator('.np-lyric-line').first
+        assert 'नमस्ते' not in first.inner_text()
+        assert 'namaste' in first.inner_text().lower()
+        assert panel.evaluate('el=>el.scrollTop') >= before-50
+        page.locator('.np-lyric-line').nth(20).click()
+        assert page.evaluate('lyricSeeks')==[20000]
+        expect(page.locator('.np-lyric-line.current')).to_have_text(page.locator('.np-lyric-line').nth(20).inner_text())
+        page.get_by_role('button',name='Show original lyrics').click()
+        expect(first).to_have_text('नमस्ते दुनिया 0')
+        assert not errors,errors
+        browser.close()

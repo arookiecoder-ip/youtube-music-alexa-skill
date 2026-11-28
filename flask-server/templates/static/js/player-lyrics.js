@@ -5,14 +5,18 @@
   const tab = $('np-tab-lyrics'), queueTab = $('np-tab-queue');
   if (!tab || !queueTab || window.JAM_GUEST) return;
   const panel = $('np-lyrics-panel'), queue = $('np-queue-list'), lines = $('np-lyrics-lines');
+  const romanizeButton = $('np-romanize');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const cache = new Map();
   let video = '', revision = 0, data = null, active = -1, selected = false, followAfter = 0;
+  let originals = [], romanized = null, showingRomanized = false, romanizerLoading = null;
   function select(lyrics) {
     selected = lyrics && !tab.disabled;
     tab.setAttribute('aria-selected', String(selected)); queueTab.setAttribute('aria-selected', String(!selected));
     tab.tabIndex = selected ? 0 : -1; queueTab.tabIndex = selected ? -1 : 0;
     panel.hidden = !selected; queue.hidden = selected;
+    romanizeButton.hidden = !selected;
+    if (selected) followAfter = 0;
     if (selected) { active = -1; tick(); }
   }
   tab.onclick = () => select(true); queueTab.onclick = () => select(false);
@@ -22,13 +26,68 @@
     const target = event.key === 'Home' ? queueTab : event.key === 'End' ? tab : button === tab ? queueTab : tab;
     if (!target.disabled) { select(target === tab); target.focus(); }
   });
-  panel.addEventListener('wheel', () => { followAfter = performance.now() + 4500; }, {passive:true});
-  panel.addEventListener('touchstart', () => { followAfter = performance.now() + 4500; }, {passive:true});
+  panel.addEventListener('wheel', () => { followAfter = performance.now() + 8000; }, {passive:true});
+  panel.addEventListener('touchstart', () => { followAfter = performance.now() + 8000; }, {passive:true});
+  panel.addEventListener('pointerdown', () => { followAfter = performance.now() + 8000; }, {passive:true});
+  panel.addEventListener('keydown', event => {
+    if (['ArrowDown','ArrowUp','PageDown','PageUp','Home','End'].includes(event.key)) followAfter = performance.now() + 8000;
+  });
+  const scriptRanges = [
+    [/\p{Script=Devanagari}+/gu, 'devanagari'], [/\p{Script=Bengali}+/gu, 'bengali'],
+    [/\p{Script=Gurmukhi}+/gu, 'gurmukhi'], [/\p{Script=Gujarati}+/gu, 'gujarati'],
+    [/\p{Script=Tamil}+/gu, 'tamil'], [/\p{Script=Telugu}+/gu, 'telugu'],
+    [/\p{Script=Kannada}+/gu, 'kannada'], [/\p{Script=Malayalam}+/gu, 'malayalam'],
+    [/\p{Script=Oriya}+/gu, 'oriya'], [/\p{Script=Sinhala}+/gu, 'sinhala']
+  ];
+  function supportsRomanization(text) { return scriptRanges.some(([pattern]) => { pattern.lastIndex=0; return pattern.test(text); }); }
+  function loadRomanizer() {
+    if (window.Sanscript) return Promise.resolve(window.Sanscript);
+    if (!romanizerLoading) romanizerLoading = new Promise((resolve,reject) => {
+      const script = document.createElement('script'); script.src = romanizeButton.dataset.romanizerSrc;
+      script.onload = () => { if (window.Sanscript) resolve(window.Sanscript); else reject(new Error('Romanization could not load.')); };
+      script.onerror = () => { script.remove(); romanizerLoading=null; reject(new Error('Romanization could not load. Try again.')); };
+      document.head.append(script);
+    });
+    return romanizerLoading;
+  }
+  romanizeButton.onclick = async () => {
+    const request = revision;
+    romanizeButton.disabled = true; romanizeButton.setAttribute('aria-busy','true');
+    try {
+      if (!romanized) {
+        const engine = await loadRomanizer();
+        if (request !== revision) return;
+        romanized = originals.map(text => {
+          let result = text;
+          for (const [pattern, scheme] of scriptRanges) result = result.replace(pattern, run => engine.t(run.normalize('NFC').replace(/[कखगजडढफय]़/g, pair => String.fromCharCode(0x958 + 'कखगजडढफय'.indexOf(pair[0]))), scheme, 'itrans', {
+            preferred_alternates:{itrans:{A:'aa',I:'ee',U:'oo'}}
+          }));
+          return result;
+        });
+      }
+      if (request !== revision) return;
+      showingRomanized = !showingRomanized;
+      const text = showingRomanized ? romanized : originals;
+      [...lines.children].forEach((line,index) => { line.textContent=text[index]; });
+      romanizeButton.setAttribute('aria-pressed',String(showingRomanized));
+      romanizeButton.textContent = showingRomanized ? 'Original' : 'Romanize';
+      romanizeButton.setAttribute('aria-label', showingRomanized ? 'Show original lyrics' : 'Show lyrics in English letters');
+    } catch (error) { window.toast?.(error.message, 'error'); }
+    finally {
+      if (request === revision) { romanizeButton.disabled=false; romanizeButton.removeAttribute('aria-busy'); }
+    }
+  };
   function paint(result) {
     data = result; active = -1; lines.replaceChildren();
     const timed = Array.isArray(result.lines) ? result.lines : [];
     const text = typeof result.text === 'string' ? result.text : '';
     const content = timed.length ? timed.map(line => line.text) : text.split('\n').filter(Boolean);
+    originals = content; romanized = null; showingRomanized = false;
+    romanizeButton.textContent = 'Romanize'; romanizeButton.setAttribute('aria-pressed','false');
+    romanizeButton.removeAttribute('aria-busy');
+    romanizeButton.setAttribute('aria-label','Show lyrics in English letters');
+    romanizeButton.disabled = !content.some(supportsRomanization);
+    romanizeButton.title = romanizeButton.disabled ? 'English-letter conversion is not needed or unavailable for this script' : 'Show words in English letters';
     tab.disabled = !content.some(line => typeof line === 'string' && line.trim());
     tab.title = tab.disabled ? 'Lyrics unavailable for this song' : 'Show lyrics';
     $('np-lyrics-credit').textContent = [!timed.length && 'Synced timing is unavailable for this song.', result.source].filter(Boolean).join(' · ');
