@@ -64,6 +64,22 @@ def test_optional_language_menu(app_origin,width):
         page.goto(origin+'/home')
         page.wait_for_function("typeof window.navigateTo === 'function'")
         assert page.locator('#np-menu-like, [data-app-action="devices"], [data-app-action="lyrics"], [data-app-action="timer"], [data-app-action="download"]').count()==0
+        if width >= 900:
+            page.evaluate("""() => {
+                __appState._currentTrack={video_id:'AAAAAAAAAAA',title:'Night drive'};
+                __appState._hasTrack=true; __appState._currentVideoId='AAAAAAAAAAA';
+                dispatchEvent(new CustomEvent('musicbox:track'));
+                openNowPlayingOverlay();
+                document.getElementById('progress-track').setAttribute('aria-valuenow','2');
+            }""")
+            lyrics=page.locator('#np-tab-lyrics')
+            expect(lyrics).to_be_enabled()
+            lyrics.click()
+            expect(page.locator('#np-lyrics-panel')).to_be_visible()
+            expect(page.locator('.np-lyric-line.current')).to_have_text('Next line')
+            expect(page.locator('#np-lyrics-lines')).not_to_contain_text('0:01')
+            page.locator('#np-tab-queue').click()
+            expect(page.locator('#np-lyrics-panel')).not_to_be_visible()
         language=page.locator('[data-app-action="language"]')
         expect(language).to_have_attribute('hidden','')
         page.evaluate("""() => {
@@ -73,11 +89,13 @@ def test_optional_language_menu(app_origin,width):
         }""")
         page.wait_for_timeout(200)
         expect(language).to_have_attribute('hidden','')
+        page.route('**/api/track/BBBBBBBBBBB/lyrics',lambda route:route.fulfill(json={'available':False,'text':'','lines':[]}))
         page.route('**/audio/?**',lambda route:route.fulfill(json={'audio_tracks':[{'id':'en','display_name':'English'},{'id':'hi','display_name':'Hindi'}],'selected':'en'}))
         page.evaluate("""() => {
             __appState._currentTrack={video_id:'BBBBBBBBBBB'};
             dispatchEvent(new CustomEvent('musicbox:track'));
         }""")
+        expect(page.locator('#np-tab-lyrics')).to_be_disabled()
         expect(language).not_to_have_attribute('hidden','')
         language.evaluate('el=>el.click()')
         expect(page.get_by_role('dialog',name='Audio language')).to_be_visible()

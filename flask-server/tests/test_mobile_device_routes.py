@@ -11,6 +11,25 @@ from mobile_devices import MobileDevices
 
 
 class MobileDeviceRoutesTests(OutputRoutesTests):
+    def test_empty_player_switches_between_browser_and_echo_without_pause(self):
+        self.device('online', owner='browser-idle', kind='browser', foreground=True)
+        self.state.update(video_id='', queue=[], playing=False, playback_processing=False)
+        self.namespace['_pause_echo_for_mobile'] = Mock(side_effect=AssertionError('idle player must not pause'))
+        before = self.output.snapshot()
+        response = self.device('transfer', target_id='browser-idle', output_token=before['output_token'])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['output_owner'], 'browser-idle')
+        self.assertFalse(response.json['handoff_pending'])
+        selected = response.json['output_token']
+        response = self.device('alexa', serial='echo-two', output_token=selected)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['output_serial'], 'echo-two')
+        self.assertFalse(response.json['handoff_pending'])
+        self.assertFalse(self.state['playing'])
+        stale = self.device('transfer', target_id='browser-idle', output_token=selected)
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(self.output.snapshot()['output_serial'], 'echo-two')
+
     def test_browser_presence_requires_focus_or_existing_audio(self):
         self.device('online', owner='browser-tab', kind='browser', foreground=False, playing=False)
         self.assertNotIn('browser-tab', [d['id'] for d in self.client.get('/api/app/devices/').json['devices']])

@@ -3992,6 +3992,28 @@ def app_mobile_devices():
         return error_response('device_id required', 400)
     action = body.get('action')
     try:
+        # With no loaded track there is no renderer to pause or hand off.
+        # Commit only the destination, fencing concurrent play/device intents.
+        if action in ('transfer', 'alexa'):
+            with _np_lock:
+                if (not _now_playing.get('video_id') and not _now_playing.get('playing')
+                        and not _now_playing.get('playback_processing')):
+                    if action == 'transfer':
+                        target = body.get('target_id')
+                        if not isinstance(target, str) or not 1 <= len(target) <= 128:
+                            return error_response('target_id required', 400)
+                        _mobile_devices.require_online(target)
+                    else:
+                        target = body.get('serial')
+                        if not isinstance(target, str) or not target or target.startswith('mobile:'):
+                            return error_response('Choose an Alexa device.', 400)
+                    result = _playback_output.select_idle_output(
+                        'phone' if action == 'transfer' else 'alexa', target, body.get('output_token'))
+                else:
+                    result = None
+            if result is not None:
+                _notify_sse()
+                return jsonify(result)
         if action == 'visibility':
             return jsonify(ok=_mobile_devices.visibility(owner, session_id, body.get('foreground'), body.get('visibility_revision'), body.get('playing')))
         if action == 'foreground':

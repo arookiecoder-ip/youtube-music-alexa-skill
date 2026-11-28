@@ -600,8 +600,14 @@
         </div>
       </div>
       <div class="np-page-right">
-        <div class="np-page-queue-head">UP NEXT</div>
-        <div class="np-queue-list" id="np-queue-list"></div>
+        <div class="np-page-queue-head np-content-tabs" role="tablist" aria-label="Player content">
+          <button type="button" id="np-tab-queue" role="tab" aria-selected="true" aria-controls="np-queue-list">UP NEXT</button>
+          <button type="button" id="np-tab-lyrics" role="tab" aria-selected="false" aria-controls="np-lyrics-panel" disabled tabindex="-1">LYRICS</button>
+        </div>
+        <div class="np-queue-list" id="np-queue-list" role="tabpanel" aria-labelledby="np-tab-queue"></div>
+        <div id="np-lyrics-panel" role="tabpanel" aria-labelledby="np-tab-lyrics" tabindex="0" hidden>
+          <div id="np-lyrics-lines"></div><p id="np-lyrics-credit"></p>
+        </div>
       </div>
     </div>
   </section>
@@ -972,6 +978,7 @@
 <script src="/static/js/like.js?v={{ asset_v }}"></script>
 <script src="/static/js/click-effects.js?v={{ asset_v }}"></script>
 <script src="/static/js/browser-app.js?v={{ asset_v }}"></script>
+<script src="/static/js/player-lyrics.js?v={{ asset_v }}"></script>
 <script>
   (function () {
     if (window.restoreFromCache) window.restoreFromCache();

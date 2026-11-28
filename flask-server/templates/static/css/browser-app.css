@@ -29,3 +29,22 @@
 #app-language-list { display:grid; gap:8px; }
 #app-language-list button { text-align:left; }
 #app-language-list button[aria-pressed=true] { background:var(--accent-soft); color:var(--accent); border-color:var(--accent-line); }
+
+/* Queue and lyrics share the existing player column. */
+.np-content-tabs { display:flex; gap:28px; padding-bottom:0; }
+.np-content-tabs button { position:relative; border:0; background:transparent; color:var(--muted); padding:0 0 14px; font:inherit; letter-spacing:inherit; cursor:pointer; }
+.np-content-tabs button[aria-selected=true] { color:var(--text); }
+.np-content-tabs button::after { content:''; position:absolute; bottom:-1px; left:0; right:0; height:2px; background:var(--accent); transform:scaleX(0); transition:transform .25s ease; }
+.np-content-tabs button[aria-selected=true]::after { transform:scaleX(1); }
+.np-content-tabs button:disabled { opacity:.3; cursor:default; }
+.np-content-tabs button:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
+#np-queue-list[hidden], #np-lyrics-panel[hidden] { display:none !important; }
+#np-lyrics-panel { position:relative; flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:24px; scroll-behavior:smooth; }
+#np-lyrics-lines { padding:12px 0 30%; animation:lyrics-enter .3s ease both; }
+.np-lyric-line { margin:0; padding:12px 6px; color:var(--muted); opacity:.55; font-size:clamp(18px,1.7vw,25px); font-weight:600; line-height:1.65; transform-origin:left center; transition:color .4s ease,opacity .4s ease,transform .4s ease; white-space:pre-wrap; }
+.np-lyric-line.current { color:var(--accent); opacity:1; transform:translateX(5px); }
+.untimed .np-lyric-line { opacity:.9; }
+#np-lyrics-credit { color:var(--muted); font-size:12px; line-height:1.5; }
+@keyframes lyrics-enter { from {opacity:0; transform:translateY(8px);} to {opacity:1; transform:translateY(0);} }
+@media(max-width:899px) { #np-lyrics-panel { flex:none; height:48dvh; min-height:240px; padding:16px 22px; } }
+@media(prefers-reduced-motion:reduce) { #np-lyrics-lines { animation:none; } .np-lyric-line,.np-content-tabs button::after { transition:none; } #np-lyrics-panel { scroll-behavior:auto; } }
