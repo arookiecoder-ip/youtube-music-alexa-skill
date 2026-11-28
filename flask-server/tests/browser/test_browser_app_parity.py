@@ -204,7 +204,7 @@ def test_lyrics_uses_real_playback_clock_seek_and_loading_icon(app_origin):
         page.on('pageerror',lambda error:errors.append(str(error)))
         page.route('**/api/track/AAAAAAAAAAA/lyrics',lambda route:route.fulfill(json={
             'available':True,'text':'नमस्ते दुनिया','lines':[
-                {'text':'नमस्ते दुनिया','start_ms':0},{'text':'मेरी जान','start_ms':1000}]}))
+                {'text':'नमस्ते दुनिया','start_ms':0},{'text':'मेरी जान','start_ms':1000,'words':[{'text':'मेरी ','start_ms':1000},{'text':'जान','start_ms':1100}]}]}))
         def seek(route):
             seeks.append(route.request.post_data_json)
             route.fulfill(json={'ok':True,'paused':True})
@@ -229,6 +229,7 @@ def test_lyrics_uses_real_playback_clock_seek_and_loading_icon(app_origin):
         }""")
         page.locator('#np-tab-lyrics').click()
         expect(page.locator('.np-lyric-line.current')).to_have_text('मेरी जान',timeout=5000)
+        expect(page.locator('.np-lyric-line.current .current-word')).to_have_text('जान')
         with page.expect_response('**/alexa/seek/'):
             page.locator('.np-lyric-line').first.click()
         page.wait_for_function('progress.livePosition() < 1000')

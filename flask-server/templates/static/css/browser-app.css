@@ -107,3 +107,5 @@
 
 #np-lyrics-panel.lyric-seek .np-lyric-line { transition:none; }
 #np-lyrics-timing-note { margin: 0 50px 12px 6px; color: var(--muted); font-size: 13px; }
+#np-lyrics-lines .np-lyric-line.current .np-lyric-word { opacity: .52; }
+#np-lyrics-lines .np-lyric-line.current .current-word { opacity: 1; }

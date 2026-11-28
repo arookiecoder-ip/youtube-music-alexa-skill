@@ -9,7 +9,7 @@
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const cache = new Map();
   let video = '', revision = 0, data = null, active = -1, selected = false, followAfter = 0;
-  let originals = [], romanized = null, showingRomanized = false, romanizerLoading = null;
+  let originals = [], romanized = null, romanizedWords = [], showingRomanized = false, romanizerLoading = null;
   function select(lyrics) {
     selected = lyrics && !tab.disabled;
     tab.setAttribute('aria-selected', String(selected)); queueTab.setAttribute('aria-selected', String(!selected));
@@ -53,10 +53,22 @@
     });
     return romanizerLoading;
   }
+  function renderLineText(line, text, words) {
+    if (!words?.length) { line.textContent = text; return; }
+    line.replaceChildren(...words.map(word => {
+      const span = document.createElement('span');
+      span.className = 'np-lyric-word';
+      span.textContent = word.text;
+      return span;
+    }));
+  }
   function showRomanized(enabled) {
     showingRomanized = enabled;
     const text = showingRomanized ? romanized : originals;
-    [...lines.children].forEach((line,index) => { line.textContent=text[index]; });
+    [...lines.children].forEach((line, index) => {
+      renderLineText(line, text[index], enabled ? romanizedWords[index] : data.lines?.[index]?.words);
+    });
+    tick();
     romanizeButton.setAttribute('aria-pressed',String(showingRomanized));
     romanizeButton.title = showingRomanized ? 'Show original lyrics' : 'Show words in English letters';
     romanizeButton.setAttribute('aria-label', showingRomanized ? 'Show original lyrics' : 'Show lyrics in English letters');
@@ -75,13 +87,17 @@
       if (!romanized) {
         const engine = await loadRomanizer();
         if (request !== revision) return;
-        romanized = originals.map(text => {
+        const convert = text => {
           let result = text;
           for (const [pattern, scheme] of scriptRanges) result = result.replace(pattern, run => engine.t(run.normalize('NFC').replace(/[कखगजडढफय]़/g, pair => String.fromCharCode(0x958 + 'कखगजडढफय'.indexOf(pair[0]))), scheme, 'itrans', {
             preferred_alternates:{itrans:{A:'aa',I:'ee',U:'oo'}}
           }));
           return result;
-        });
+        };
+        romanized = originals.map(convert);
+        romanizedWords = (data.lines || []).map(line => line.words?.map(word => ({
+          ...word, text: convert(word.text)
+        })));
       }
       await new Promise(resolve => setTimeout(resolve, Math.max(0, 220 - (performance.now() - busySince))));
       if (request !== revision) return;
@@ -110,7 +126,8 @@
     const fragment = document.createDocumentFragment();
     content.forEach((text, index) => {
       const line = document.createElement(timed.length ? 'button' : 'p');
-      line.className = 'np-lyric-line'; line.textContent = text;
+      line.className = 'np-lyric-line';
+      renderLineText(line, text, timed[index]?.words);
       if (timed.length) {
         line.type = 'button'; line.title = 'Play from this line';
         const lineVideo = video;
@@ -169,12 +186,23 @@
       if (lines.children[active]) { lines.children[active].classList.add('current'); lines.children[active].setAttribute('aria-current','true'); }
     }
     const line = lines.children[active];
+    const words = showingRomanized ? romanizedWords[active] : data.lines[active]?.words;
+    if (line && words?.length) {
+      let currentWord = -1;
+      for (let i = 0; i < words.length && position >= words[i].start_ms; i++) currentWord = i;
+      const previous = line.querySelector('.current-word');
+      const current = line.children[currentWord];
+      if (previous !== current) {
+        previous?.classList.remove('current-word');
+        current?.classList.add('current-word');
+      }
+    }
     if (line && performance.now() >= followAfter) {
       const target = Math.max(0, line.offsetTop - panel.clientHeight * .38);
       if (Math.abs(panel.scrollTop - target) > 8) panel.scrollTo({top:target, behavior:reduced.matches || panel.classList.contains('lyric-seek') ? 'instant' : 'smooth'});
     }
   }
-  const clock = setInterval(tick, 250);
+  const clock = setInterval(tick, 80);
   window.addEventListener('musicbox:track', trackChanged);
   window.addEventListener('pagehide', () => clearInterval(clock));
   trackChanged();

@@ -7,6 +7,30 @@ import math
 import requests
 
 
+_WORD_CUE = re.compile(r'<(\d{1,3}):([0-5]\d(?:\.\d{1,3})?)>')
+
+
+def split_word_cues(text, line_start):
+    """Read explicit Enhanced LRC word cues, preserving spaces and punctuation."""
+    cues = list(_WORD_CUE.finditer(text))
+    if not cues:
+        return text, []
+    plain = _WORD_CUE.sub('', text)
+    if len(cues) > 128 or text[:cues[0].start()].strip():
+        return plain, []
+    words = []
+    previous = line_start
+    for index, cue in enumerate(cues):
+        start = round((int(cue[1]) * 60 + float(cue[2])) * 1000)
+        end = cues[index + 1].start() if index + 1 < len(cues) else len(text)
+        if start < previous:
+            return plain, []
+        words.append({'text': text[cue.end():end], 'start_ms': start})
+        previous = start
+    words[0]['text'] = text[:cues[0].start()] + words[0]['text']
+    return plain, [word for word in words if word['text']]
+
+
 def normalize_lyrics(result):
     result = result if isinstance(result, dict) else {}
     raw = result.get('lyrics')
@@ -16,13 +40,17 @@ def normalize_lyrics(result):
         for line in raw[:2000]:
             text = line.get('text', '') if isinstance(line, dict) else getattr(line, 'text', '')
             start = line.get('start_time', 0) if isinstance(line, dict) else getattr(line, 'start_time', 0)
-            if not isinstance(text, str) or not isinstance(start, (int, float)) or start < 0:
+            if not isinstance(text, str) or not isinstance(start, (int, float)) or not math.isfinite(start) or start < 0:
                 continue
             text = text[:remaining]
             if not text:
                 continue
             remaining -= len(text)
-            lines.append({'text': text, 'start_ms': int(start)})
+            text, words = split_word_cues(text, start)
+            line = {'text': text, 'start_ms': int(start)}
+            if words:
+                line['words'] = words
+            lines.append(line)
             if remaining <= 0:
                 break
         lines.sort(key=lambda line: line['start_ms'])

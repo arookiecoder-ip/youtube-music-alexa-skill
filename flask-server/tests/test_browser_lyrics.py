@@ -77,3 +77,16 @@ class BrowserLyricsTests(TestCase):
             self.assertEqual(BrowserLyrics().get('alice','AAAAAAAAAAA',provider)['text'],'Plain lyrics')
         with mock.patch('browser_lyrics.requests.get',side_effect=TimeoutError):
             self.assertEqual(BrowserLyrics().get('alice','AAAAAAAAAAA',provider)['text'],'Plain lyrics')
+
+    def test_enhanced_lrc_keeps_word_cues_and_plain_display_text(self):
+        result = normalize_lyrics({'lyrics': [
+            {'text': '<00:01.20>Hello <00:01.75>world!', 'start_time': 1200},
+            {'text': 'Line timing only', 'start_time': 3000},
+        ]})
+        first, second = result['lines']
+        self.assertEqual(first['text'], 'Hello world!')
+        self.assertEqual(first['words'], [
+            {'text': 'Hello ', 'start_ms': 1200},
+            {'text': 'world!', 'start_ms': 1750},
+        ])
+        self.assertNotIn('words', second)
